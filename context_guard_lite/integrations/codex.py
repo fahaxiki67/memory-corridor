@@ -415,6 +415,12 @@ def uninstall_hooks(root: Path) -> dict:
     }
 
 
+EXPECTED_MATCHERS = {
+    "PreCompact": PRE_COMPACT_MATCHER,
+    "SessionStart": SESSION_START_MATCHER,
+}
+
+
 def hook_status(root: Path) -> dict:
     """只读检查安装状态。Codex 内部 trust 状态没有公开接口，不猜测。"""
     paths = project_paths(root)
@@ -440,7 +446,14 @@ def hook_status(root: Path) -> dict:
     result["hooks_file_valid"] = True
     hooks = config.get("hooks", {})
     for event in SUPPORTED_EVENTS:
-        entry = {"configured": False, "matcher": None, "third_party_present": False}
+        expected_matcher = EXPECTED_MATCHERS.get(event)
+        entry = {
+            "configured": False,
+            "matcher": None,
+            "matcher_expected": expected_matcher,
+            "matcher_drifted": False,
+            "third_party_present": False,
+        }
         for group in hooks.get(event, []):
             handlers = group.get("hooks", [])
             if any(_is_memory_corridor_handler(handler) for handler in handlers):
@@ -450,5 +463,8 @@ def hook_status(root: Path) -> dict:
                 entry["third_party_present"] = True
         if not entry["configured"] and hooks.get(event):
             entry["third_party_present"] = True
+        if entry["configured"] and expected_matcher is not None:
+            # matcher 被手动改动会导致 hook 触发条件悄然变化，status 需明示。
+            entry["matcher_drifted"] = entry["matcher"] != expected_matcher
         result["events"][event] = entry
     return result

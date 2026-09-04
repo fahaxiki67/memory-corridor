@@ -6,7 +6,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from .contract import GuardError, add_note, init_project, load_state, project_paths, set_enabled
+from .contract import GuardError, add_note, init_project, load_state, project_paths, read_events, set_enabled
 from .evidence import add_evidence, list_evidence
 from .gate import check_gate
 from .integrations import codex as codex_integration
@@ -54,6 +54,8 @@ def _parser() -> argparse.ArgumentParser:
     req_add.add_argument("--kind", choices=sorted(KINDS), default="must")
     req_list = requirement_commands.add_parser("list", help="列出 requirements")
     req_list.add_argument("--json", action="store_true", dest="as_json")
+    req_list.add_argument("--kind", help="只列出指定类型的 requirements")
+    req_list.add_argument("--status", help="只列出指定状态的 requirements")
     req_update = requirement_commands.add_parser("update", help="更新 requirement")
     req_update.add_argument("requirement_id")
     req_update.add_argument("--text")
@@ -71,6 +73,7 @@ def _parser() -> argparse.ArgumentParser:
     evidence_add.add_argument("--command", help="实际执行的验证命令")
     evidence_list = evidence_commands.add_parser("list", help="列出 evidence")
     evidence_list.add_argument("--json", action="store_true", dest="as_json")
+    evidence_list.add_argument("--for", dest="filter_requirement", help="只列出绑定到指定 requirement ID 的 evidence")
 
     recovery = commands.add_parser("recovery", help="生成恢复包")
     recovery_commands = recovery.add_subparsers(dest="recovery_command", required=True)
@@ -92,6 +95,14 @@ def _parser() -> argparse.ArgumentParser:
     note_add.add_argument("--source", default="manual")
     note_list = note_commands.add_parser("list", help="列出结构化笔记")
     note_list.add_argument("--limit", type=int, default=20)
+    note_list.add_argument("--kind", help="只列出指定类型的笔记")
+    note_list.add_argument("--source", help="只列出指定来源的笔记")
+
+    events = commands.add_parser("events", help="查看事件日志（只读审计 events.jsonl）")
+    events_commands = events.add_subparsers(dest="events_command", required=True)
+    ev_list = events_commands.add_parser("list", help="列出事件")
+    ev_list.add_argument("--limit", type=int, default=20, help="只显示最近 N 条（0=不显示）")
+    ev_list.add_argument("--type", dest="event_type", help="按事件类型过滤，如 requirement.add")
 
     codex = commands.add_parser("codex", help="Codex 原生 Hook 集成")
     codex_commands = codex.add_subparsers(dest="codex_command", required=True)
@@ -142,6 +153,10 @@ def _cmd_requirements(paths, args) -> int:
         return 0
     if args.requirements_command == "list":
         items = load_state(paths)["requirements"]
+        if getattr(args, "kind", None):
+            items = [item for item in items if item.get("kind") == args.kind]
+        if getattr(args, "status", None):
+            items = [item for item in items if item.get("status") == args.status]
         if args.as_json:
             _print_json(items)
         elif not items:
@@ -175,6 +190,10 @@ def _cmd_evidence(paths, args) -> int:
         print(f"已记录 {evidence['id']} → {evidence['requirement_id']} v{evidence['requirement_revision']} [{evidence['result']}]")
         return 0
     items = list_evidence(paths)
+    filter_requirement = getattr(args, "filter_requirement", None)
+    if filter_requirement:
+        target = filter_requirement.upper()
+        items = [item for item in items if item.get("requirement_id", "").upper() == target]
     if args.as_json:
         _print_json(items)
     elif not items:
@@ -219,7 +238,12 @@ def _cmd_note(paths, args) -> int:
         note = add_note(paths, args.text, args.kind, args.source)
         print(f"已记录 {note['id']} [{note['kind']}]：{note['text']}")
         return 0
-    notes = load_state(paths)["notes"][-args.limit :] if args.limit > 0 else []
+    notes = load_state(paths)["notes"]
+    if getattr(args, "kind", None):
+        notes = [note for note in notes if note.get("kind") == args.kind]
+    if getattr(args, "source", None):
+        notes = [note for note in notes if note.get("source") == args.source]
+    notes = notes[-args.limit :] if args.limit > 0 else []
     if not notes:
         print("暂无结构化笔记。")
     else:
@@ -272,6 +296,8 @@ def _print_codex_status(result: dict) -> int:
         elif entry["configured"]:
             matcher = f"，matcher={entry['matcher']}" if entry["matcher"] else ""
             suffix = "（同组含第三方 Hook）" if entry["third_party_present"] else ""
+            if entry.get("matcher_drifted"):
+                suffix += f"【警告：matcher 已偏离安装值，预期 {entry.get('matcher_expected')}】"
             print(f"- {event}：已安装{matcher}{suffix}")
         elif entry["third_party_present"]:
             print(f"- {event}：仅第三方 Hook，Memory Corridor 未安装")
@@ -302,6 +328,20 @@ def _print_codex_uninstall(result: dict) -> int:
         print(f"上一版本备份：{result['backup']}")
     print("第三方 Hook 已保留。")
     return 0
+
+
+def _cmd_events(paths, args) -> int:
+    if args.events_command == "list":
+        events = read_events(paths, limit=args.limit, event_type=args.event_type)
+        if not events:
+            print("暂无匹配的事件。")
+            return 0
+        for event in events:
+            details = ", ".join(f"{key}={value}" for key, value in event.items() if key not in {"at", "type"})
+            suffix = f"  ({details})" if details else ""
+            print(f"{event.get('at', '?')}  {event.get('type', '?')}{suffix}")
+        return 0
+    return 2
 
 
 def _cmd_codex(paths, args) -> int:
@@ -347,6 +387,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_gate(paths, args)
         if args.top_command in {"note", "notebook"}:
             return _cmd_note(paths, args)
+        if args.top_command == "events":
+            return _cmd_events(paths, args)
         if args.top_command == "codex":
             return _cmd_codex(paths, args)
         parser.error(f"未知命令: {args.top_command}")

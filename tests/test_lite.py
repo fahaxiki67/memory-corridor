@@ -153,5 +153,97 @@ class EdgeCaseTests(unittest.TestCase):
         self.assertEqual(STATUSES, {"open", "blocked", "done", "superseded"})
 
 
+class LedgerQueryTests(unittest.TestCase):
+    """账本查询增强（list 过滤、events 审计）：每个用例使用独立已初始化项目。"""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        init_project(self.root, "query-project")
+        self.paths = project_paths(self.root)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _list_output(self, argv: list[str]) -> str:
+        import io as _io
+        import contextlib as _contextlib
+
+        with _contextlib.redirect_stdout(_io.StringIO()) as fake:
+            self.assertEqual(main(argv), 0)
+        return fake.getvalue()
+
+    def test_requirements_list_filters_by_kind_and_status(self) -> None:
+        r1 = add_requirement(self.paths, "must 类要求")
+        add_requirement(self.paths, "avoid 类要求", kind="avoid")
+        update_requirement(self.paths, r1["id"], status="done")
+
+        by_kind = self._list_output(["--root", str(self.root), "requirements", "list", "--kind", "must"])
+        self.assertIn("must 类要求", by_kind)
+        self.assertNotIn("avoid 类要求", by_kind)
+
+        by_status = self._list_output(["--root", str(self.root), "requirements", "list", "--status", "open"])
+        self.assertIn("avoid 类要求", by_status)
+        self.assertNotIn("must 类要求", by_status)
+
+        everything = self._list_output(["--root", str(self.root), "requirements", "list"])
+        self.assertIn("must 类要求", everything)
+        self.assertIn("avoid 类要求", everything)
+
+    def test_evidence_list_filters_by_requirement(self) -> None:
+        r1 = add_requirement(self.paths, "要求一")
+        r2 = add_requirement(self.paths, "要求二")
+        add_evidence(self.paths, r1["id"], "要求一的证据", "success")
+        add_evidence(self.paths, r2["id"], "要求二的证据", "failed")
+
+        filtered = self._list_output(["--root", str(self.root), "evidence", "list", "--for", r1["id"]])
+        self.assertIn("要求一的证据", filtered)
+        self.assertNotIn("要求二的证据", filtered)
+
+        all_rows = self._list_output(["--root", str(self.root), "evidence", "list"])
+        self.assertIn("要求一的证据", all_rows)
+        self.assertIn("要求二的证据", all_rows)
+
+    def test_note_list_filters_by_kind_and_source(self) -> None:
+        from context_guard_lite.contract import add_note
+
+        add_note(self.paths, "经验条目", kind="experience", source="ai")
+        add_note(self.paths, "决定条目", kind="decision", source="user")
+        add_note(self.paths, "AI 决定条目", kind="decision", source="ai")
+
+        by_kind = self._list_output(["--root", str(self.root), "note", "list", "--kind", "experience"])
+        self.assertIn("经验条目", by_kind)
+        self.assertNotIn("决定条目", by_kind)
+
+        by_source = self._list_output(["--root", str(self.root), "note", "list", "--source", "ai"])
+        self.assertIn("经验条目", by_source)
+        self.assertIn("AI 决定条目", by_source)
+        matched = [line for line in by_source.splitlines() if "决定条目" in line]
+        self.assertEqual(len(matched), 1)
+
+    def test_events_list_shows_recent_and_filters_by_type(self) -> None:
+        requirement = add_requirement(self.paths, "事件审计要求")
+        add_evidence(self.paths, requirement["id"], "事件审计证据", "success")
+
+        recent = self._list_output(["--root", str(self.root), "events", "list", "--limit", "3"])
+        self.assertIn("evidence.add", recent)
+
+        only_req = self._list_output(["--root", str(self.root), "events", "list", "--type", "requirement.add"])
+        self.assertIn("requirement.add", only_req)
+        self.assertNotIn("evidence.add", only_req)
+
+        empty = self._list_output(["--root", str(self.root), "events", "list", "--limit", "0"])
+        self.assertIn("暂无匹配的事件", empty)
+
+    def test_events_list_requires_initialized_project(self) -> None:
+        import io as _io
+        import contextlib as _contextlib
+
+        bare = Path(self.temp_dir.name) / "bare"
+        bare.mkdir()
+        with _contextlib.redirect_stderr(_io.StringIO()):
+            self.assertEqual(main(["--root", str(bare), "events", "list"]), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

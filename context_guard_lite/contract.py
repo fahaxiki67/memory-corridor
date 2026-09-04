@@ -185,3 +185,29 @@ def notebook_tail(paths: ProjectPaths, limit: int = 20) -> list[str]:
     except OSError as exc:
         raise GuardError(f"无法读取旁记事本: {exc}") from exc
     return lines[-limit:]
+
+
+def read_events(paths: ProjectPaths, *, limit: int | None = None, event_type: str | None = None) -> list[dict]:
+    """只读读取 events.jsonl；跳过无法解析的行，不修改文件。"""
+    _ensure_initialized(paths)
+    try:
+        raw_lines = paths.events.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as exc:
+        raise GuardError(f"无法读取事件日志: {exc}") from exc
+    events: list[dict] = []
+    for line in raw_lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event_type is not None and event.get("type") != event_type:
+            continue
+        events.append(event)
+    if limit is not None:
+        events = events[-limit:] if limit > 0 else []
+    return events

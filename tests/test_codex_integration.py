@@ -447,6 +447,29 @@ class CodexConfigTests(unittest.TestCase):
             self.assertTrue(status["events"][event]["configured"], event)
         self.assertFalse(status["events"]["Stop"]["third_party_present"])
 
+    def test_status_detects_matcher_drift(self) -> None:
+        self._install_via_cli()
+        status = hook_status(self.root)
+        for event in ("PreCompact", "SessionStart", "Stop"):
+            self.assertFalse(status["events"][event]["matcher_drifted"], event)
+        # 手动改动 SessionStart 的 matcher → 检出漂移；Stop 无预期 matcher，不参与漂移检测
+        config = self._load_config()
+        config["hooks"]["SessionStart"][0]["matcher"] = "resume"
+        self.hooks_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+        drifted = hook_status(self.root)
+        self.assertTrue(drifted["events"]["SessionStart"]["matcher_drifted"])
+        self.assertEqual(drifted["events"]["SessionStart"]["matcher"], "resume")
+        self.assertEqual(drifted["events"]["SessionStart"]["matcher_expected"], "resume|compact")
+        self.assertFalse(drifted["events"]["Stop"]["matcher_drifted"])
+        self.assertFalse(drifted["events"]["PreCompact"]["matcher_drifted"])
+        # CLI status 输出应包含警告
+        import contextlib as _contextlib
+        import io as _io
+
+        with _contextlib.redirect_stdout(_io.StringIO()) as fake_out:
+            self.assertEqual(main(["--root", str(self.root), "codex", "status"]), 0)
+        self.assertIn("偏离", fake_out.getvalue())
+
     # 场景 20/21：不依赖 bash/PowerShell 路径语法；含空格路径正常
     def test_paths_with_spaces_work_without_shell_syntax(self) -> None:
         spaced = Path(tempfile.mkdtemp(prefix="memory corridor 空格 "))

@@ -5,6 +5,25 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.3.0] - 2026-09-05
+
+### 新增
+
+- 账本查询增强（账本变大后的按需过滤，全部为可选参数，向后兼容）：
+  - `requirements list --kind must --status open`；
+  - `evidence list --for R001`（只看绑定到某个 requirement 的证据）；
+  - `note list --kind experience --source ai`。
+- 新增只读审计命令 `events list`：查询追加式事件日志 `events.jsonl`，支持 `--limit N` 与 `--type requirement.add` 按类型过滤；跳过无法解析的行，绝不修改文件。
+- `codex status` 新增配置漂移检测：PreCompact/SessionStart 的 matcher 被手动改动后，status 明确警告"已偏离安装值"，避免 Hook 触发条件静默变化。
+
+### 变更
+
+- CI 矩阵加入 Python 3.14（3 操作系统 × 4 版本 = 12 job），并增加 `concurrency` 取消同分支过时运行；`classifiers` 同步声明 3.14。
+
+### 测试
+
+- 新增 6 项测试（三类 list 过滤、events 过滤与未初始化拒绝、matcher 漂移检测），总测试 55 项。
+
 ## [2.2.1] - 2026-09-05
 
 ### 新增

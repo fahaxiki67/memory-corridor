@@ -148,6 +148,13 @@ context-guard note list --limit 20
 
 这些记录会同时进入 `state.json` 和可直接打开的 `notebook.md`。程序只保存、检索和展示，不会把经验未经确认地改写成硬性 requirement；这样“经验”与“用户要求”不会混在一起。
 
+所有 `list` 命令都支持按需过滤：`requirements list --kind must --status open`、`evidence list --for R001`、`note list --kind experience --source ai`。追加式事件日志也可以只读审计：
+
+```text
+context-guard events list --limit 20
+context-guard events list --type requirement.add
+```
+
 ### 5. compact/resume 后恢复和完成检查
 
 ```text
