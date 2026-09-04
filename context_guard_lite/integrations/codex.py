@@ -16,12 +16,11 @@ recovery / gate / contract API 之间的翻译：
 from __future__ import annotations
 
 import json
-import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..contract import GuardError, ProjectPaths, atomic_write, project_paths
+from ..contract import GuardError, ProjectPaths, project_paths
 from ..gate import check_gate
 from ..recovery import build_packet, write_packet
 
@@ -34,7 +33,6 @@ PRE_COMPACT_MATCHER = "manual|auto"
 RESUME_SOURCES = {"resume", "compact"}
 ADDITIONAL_CONTEXT_LIMIT = 4000
 MAX_BLOCKERS_IN_REASON = 10
-BACKUP_SUFFIX = ".bak"
 CODEX_DIR = ".codex"
 HOOKS_FILE_NAME = "hooks.json"
 MANAGED_DESCRIPTION = (
@@ -59,10 +57,6 @@ class HookOutcome:
     output: dict | None
     exit_code: int = 0
     diagnostics: tuple[str, ...] = ()
-
-
-def hooks_config_path(root: Path) -> Path:
-    return root / CODEX_DIR / HOOKS_FILE_NAME
 
 
 # ---------------------------------------------------------------------------
@@ -269,202 +263,40 @@ def _render_blockers(gate: dict) -> str:
 
 # ---------------------------------------------------------------------------
 # hooks.json 配置管理（仅 project scope：<project>/.codex/hooks.json）
+# 实现委托给通用引擎 hook_config，Claude Code 集成共用同一套逻辑。
 # ---------------------------------------------------------------------------
 
+from .hook_config import HookPlatform, install_platform_hooks, platform_hook_status, uninstall_platform_hooks  # noqa: E402
 
-def _handler_for(event: str) -> dict:
-    handler: dict = {
-        "type": HOOK_TYPE,
-        "command": HOOK_COMMAND,
-        "timeout": HOOK_TIMEOUT_SECONDS,
-        "statusMessage": STATUS_MESSAGES[event],
-    }
-    if event == "SessionStart":
-        handler["additionalContextLimit"] = ADDITIONAL_CONTEXT_LIMIT
-    return handler
+PLATFORM = HookPlatform(
+    name="codex",
+    config_path_name=Path(CODEX_DIR) / HOOKS_FILE_NAME,
+    command=HOOK_COMMAND,
+    timeout_seconds=HOOK_TIMEOUT_SECONDS,
+    status_messages=STATUS_MESSAGES,
+    matchers={"PreCompact": PRE_COMPACT_MATCHER, "SessionStart": SESSION_START_MATCHER, "Stop": None},
+    extra_handler_fields={"SessionStart": {"additionalContextLimit": ADDITIONAL_CONTEXT_LIMIT}},
+    fresh_top_level={"description": MANAGED_DESCRIPTION, "hooks": {}},
+)
 
-
-def _group_for(event: str) -> dict:
-    group: dict = {"hooks": [_handler_for(event)]}
-    if event == "SessionStart":
-        group["matcher"] = SESSION_START_MATCHER
-    elif event == "PreCompact":
-        group["matcher"] = PRE_COMPACT_MATCHER
-    return group
+# 兼容旧引用：matcher 预期表（漂移检测的对外常量）。
+EXPECTED_MATCHERS = {event: matcher for event, matcher in PLATFORM.matchers.items() if matcher is not None}
 
 
-def _is_memory_corridor_handler(handler: object) -> bool:
-    return isinstance(handler, dict) and handler.get("type") == HOOK_TYPE and handler.get("command") == HOOK_COMMAND
-
-
-def _contains_memory_corridor(groups: list) -> bool:
-    for group in groups:
-        if not isinstance(group, dict):
-            continue
-        for handler in group.get("hooks", []):
-            if _is_memory_corridor_handler(handler):
-                return True
-    return False
-
-
-def _validate_config(config: object, path: Path) -> None:
-    if not isinstance(config, dict):
-        raise GuardError(f"{path} 顶层必须是 JSON 对象")
-    hooks = config.get("hooks", {})
-    if not isinstance(hooks, dict):
-        raise GuardError(f'{path} 的 "hooks" 必须是 JSON 对象')
-    for event, groups in hooks.items():
-        if not isinstance(groups, list):
-            raise GuardError(f"{path} 事件 {event} 必须是列表")
-        for index, group in enumerate(groups):
-            if not isinstance(group, dict):
-                raise GuardError(f"{path} 事件 {event} 第 {index} 组必须是对象")
-            entries = group.get("hooks", [])
-            if not isinstance(entries, list):
-                raise GuardError(f'{path} 事件 {event} 第 {index} 组的 "hooks" 必须是列表')
-
-
-def _read_hooks_config(path: Path) -> dict:
-    # utf-8-sig：容忍 Windows 记事本等编辑器留下的 UTF-8 BOM；写入时始终不带 BOM。
-    try:
-        raw = path.read_text(encoding="utf-8-sig")
-    except OSError as exc:
-        raise GuardError(f"无法读取 {path}：{exc}") from exc
-    try:
-        config = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise GuardError(f"{path} 不是合法 JSON，已停止操作且不修改原文件：{exc}") from exc
-    _validate_config(config, path)
-    return config
-
-
-def _write_backup(path: Path) -> Path:
-    # 单份滚动备份：始终覆盖同名 .bak，不无限生成。
-    backup = path.with_name(path.name + BACKUP_SUFFIX)
-    atomic_write(backup, path.read_text(encoding="utf-8"))
-    return backup
-
-
-def _write_hooks_config(path: Path, config: dict) -> None:
-    atomic_write(path, json.dumps(config, ensure_ascii=False, indent=2) + "\n")
+def hooks_config_path(root: Path) -> Path:
+    return Path(root) / CODEX_DIR / HOOKS_FILE_NAME
 
 
 def install_hooks(root: Path) -> dict:
     """把三个 Memory Corridor Hook 合并进 <root>/.codex/hooks.json（幂等）。"""
-    path = hooks_config_path(root)
-    if path.exists():
-        config = _read_hooks_config(path)
-        existed = True
-    else:
-        config = {"description": MANAGED_DESCRIPTION, "hooks": {}}
-        existed = False
-    hooks = config.setdefault("hooks", {})
-    added: list[str] = []
-    already: list[str] = []
-    for event in SUPPORTED_EVENTS:
-        groups = hooks.setdefault(event, [])
-        if _contains_memory_corridor(groups):
-            already.append(event)
-            continue
-        groups.append(_group_for(event))
-        added.append(event)
-    if not added:
-        return {"added": [], "already": already, "path": str(path), "written": False, "backup": None}
-    backup = _write_backup(path) if existed else None
-    _write_hooks_config(path, config)
-    return {
-        "added": added,
-        "already": already,
-        "path": str(path),
-        "written": True,
-        "backup": str(backup) if backup else None,
-    }
+    return install_platform_hooks(PLATFORM, root)
 
 
 def uninstall_hooks(root: Path) -> dict:
     """只移除 Memory Corridor 自己的 Hook，第三方 Hook 原样保留（幂等）。"""
-    path = hooks_config_path(root)
-    if not path.exists():
-        return {"removed": [], "path": str(path), "written": False, "backup": None, "absent": True}
-    config = _read_hooks_config(path)
-    hooks = config.get("hooks", {})
-    removed: set[str] = set()
-    for event, groups in list(hooks.items()):
-        kept_groups = []
-        for group in groups:
-            entries = group.get("hooks", [])
-            kept = [handler for handler in entries if not _is_memory_corridor_handler(handler)]
-            if len(kept) != len(entries):
-                removed.add(event)
-            if kept:
-                group["hooks"] = kept
-                kept_groups.append(group)
-        if kept_groups:
-            hooks[event] = kept_groups
-        else:
-            del hooks[event]
-    if not removed:
-        return {"removed": [], "path": str(path), "written": False, "backup": None}
-    backup = _write_backup(path)
-    _write_hooks_config(path, config)
-    return {
-        "removed": sorted(removed),
-        "path": str(path),
-        "written": True,
-        "backup": str(backup),
-    }
-
-
-EXPECTED_MATCHERS = {
-    "PreCompact": PRE_COMPACT_MATCHER,
-    "SessionStart": SESSION_START_MATCHER,
-}
+    return uninstall_platform_hooks(PLATFORM, root)
 
 
 def hook_status(root: Path) -> dict:
     """只读检查安装状态。Codex 内部 trust 状态没有公开接口，不猜测。"""
-    paths = project_paths(root)
-    path = hooks_config_path(paths.root)
-    result: dict = {
-        "hooks_file": str(path),
-        "hooks_file_exists": path.exists(),
-        "hooks_file_valid": None,
-        "hooks_file_error": None,
-        "events": {},
-        "project_initialized": paths.state.exists(),
-        "command_on_path": shutil.which("memory-corridor") is not None,
-        "trust": "unable to determine automatically",
-    }
-    if not path.exists():
-        return result
-    try:
-        config = _read_hooks_config(path)
-    except GuardError as exc:
-        result["hooks_file_valid"] = False
-        result["hooks_file_error"] = str(exc)
-        return result
-    result["hooks_file_valid"] = True
-    hooks = config.get("hooks", {})
-    for event in SUPPORTED_EVENTS:
-        expected_matcher = EXPECTED_MATCHERS.get(event)
-        entry = {
-            "configured": False,
-            "matcher": None,
-            "matcher_expected": expected_matcher,
-            "matcher_drifted": False,
-            "third_party_present": False,
-        }
-        for group in hooks.get(event, []):
-            handlers = group.get("hooks", [])
-            if any(_is_memory_corridor_handler(handler) for handler in handlers):
-                entry["configured"] = True
-                entry["matcher"] = group.get("matcher")
-            if any(not _is_memory_corridor_handler(handler) for handler in handlers):
-                entry["third_party_present"] = True
-        if not entry["configured"] and hooks.get(event):
-            entry["third_party_present"] = True
-        if entry["configured"] and expected_matcher is not None:
-            # matcher 被手动改动会导致 hook 触发条件悄然变化，status 需明示。
-            entry["matcher_drifted"] = entry["matcher"] != expected_matcher
-        result["events"][event] = entry
-    return result
+    return platform_hook_status(PLATFORM, root)

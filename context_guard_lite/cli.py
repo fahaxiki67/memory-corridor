@@ -11,6 +11,7 @@ from . import __version__
 from .contract import GuardError, add_note, init_project, load_state, project_paths, read_events, set_enabled
 from .evidence import add_evidence, list_evidence
 from .gate import check_gate
+from .integrations import claude as claude_integration
 from .integrations import codex as codex_integration
 from .recovery import build_packet, write_packet
 from .requirements import KINDS, STATUSES, add_requirement, import_requirements, mark_done, update_requirement
@@ -121,6 +122,14 @@ def _parser() -> argparse.ArgumentParser:
     codex_status = codex_commands.add_parser("status", help="检查 Codex Hook 安装状态")
     codex_status.add_argument("--json", action="store_true", dest="as_json")
     codex_commands.add_parser("uninstall", help="只移除 Memory Corridor Hook，保留第三方 Hook")
+
+    claude = commands.add_parser("claude", help="Claude Code 原生 Hook 集成")
+    claude_commands = claude.add_subparsers(dest="claude_command", required=True)
+    claude_commands.add_parser("hook", help="处理 Claude Code Hook 事件（stdin JSON 进，stdout JSON 出）")
+    claude_commands.add_parser("install", help="把三个 Memory Corridor Hook 合并进 <项目>/.claude/settings.json")
+    claude_status = claude_commands.add_parser("status", help="检查 Claude Hook 安装状态")
+    claude_status.add_argument("--json", action="store_true", dest="as_json")
+    claude_commands.add_parser("uninstall", help="只移除 Memory Corridor Hook，保留用户配置")
 
     return parser
 
@@ -315,25 +324,42 @@ def _cmd_note(paths, args) -> int:
     return 0
 
 
+CODEX_LABEL = "Codex"
+CODEX_TRUST_STEPS = [
+    "在项目目录启动 codex；",
+    "运行 /hooks 查看；",
+    "确认 Memory Corridor 三个 Hook（PreCompact / SessionStart / Stop）已识别并信任。",
+]
+CLAUDE_LABEL = "Claude Code"
+CLAUDE_TRUST_STEPS = [
+    "首次在项目目录启动 claude 时接受工作区信任对话框（信任前项目 Hook 不运行）；",
+    "运行 /hooks 只读查看已注册的 Hook；",
+    "-p 非交互模式视为已信任，可直接用于验收与自动化。",
+]
+
+
+def _print_hook_trust_reminder(label: str, steps: list[str]) -> None:
+    print(f"注意：{label} 对项目级非托管 Hook 要求人工确认后才会运行：")
+    for index, step in enumerate(steps, 1):
+        print(f"{index}. {step}")
+
+
 def _print_codex_trust_reminder() -> None:
-    print("注意：Codex 对项目级非托管 Hook 要求人工 review/trust，信任之前不会运行：")
-    print("1. 在项目目录启动 codex；")
-    print("2. 运行 /hooks 查看；")
-    print("3. 确认 Memory Corridor 三个 Hook（PreCompact / SessionStart / Stop）已识别并信任。")
+    _print_hook_trust_reminder(CODEX_LABEL, CODEX_TRUST_STEPS)
 
 
-def _warn_if_command_missing() -> None:
+def _warn_if_command_missing(label: str = CODEX_LABEL) -> None:
     if shutil.which("memory-corridor") is None:
-        print("警告：当前 PATH 上找不到 memory-corridor 命令，Codex 将无法调用 Hook（触发时会报 command not found）。")
-        print("请先 pip install 本项目，或在已激活对应 venv 的终端里启动 codex。")
+        print(f"警告：当前 PATH 上找不到 memory-corridor 命令，{label} 将无法调用 Hook（触发时会报 command not found）。")
+        print("请先 pip install 本项目，或在已激活对应 venv 的终端里启动对应 CLI。")
 
 
-def _print_codex_install(result: dict) -> int:
+def _print_hook_install(label: str, trust_steps: list[str], result: dict) -> int:
     if not result["written"]:
-        print(f"Codex Hook 已安装，本次未做任何修改：{result['path']}")
+        print(f"{label} Hook 已安装，本次未做任何修改：{result['path']}")
         print(f"已存在：{', '.join(result['already'])}")
-        _warn_if_command_missing()
-        _print_codex_trust_reminder()
+        _warn_if_command_missing(label)
+        _print_hook_trust_reminder(label, trust_steps)
         return 0
     print(f"已写入：{result['path']}")
     if result["backup"]:
@@ -342,14 +368,18 @@ def _print_codex_install(result: dict) -> int:
         print(f"- 已添加 {event}")
     if result["already"]:
         print(f"- 已存在，未重复添加：{', '.join(result['already'])}")
-    _warn_if_command_missing()
-    _print_codex_trust_reminder()
+    _warn_if_command_missing(label)
+    _print_hook_trust_reminder(label, trust_steps)
     return 0
 
 
-def _print_codex_status(result: dict) -> int:
+def _print_codex_install(result: dict) -> int:
+    return _print_hook_install(CODEX_LABEL, CODEX_TRUST_STEPS, result)
+
+
+def _print_hook_status(label: str, trust_hint: str, result: dict) -> int:
     exists = "存在" if result["hooks_file_exists"] else "不存在"
-    print(f"Codex hooks 配置：{result['hooks_file']}（{exists}）")
+    print(f"{label} hooks 配置：{result['hooks_file']}（{exists}）")
     if result["hooks_file_valid"] is False:
         print(f"文件无法解析：{result['hooks_file_error']}")
     for event in ("PreCompact", "SessionStart", "Stop"):
@@ -369,16 +399,20 @@ def _print_codex_status(result: dict) -> int:
     if result["project_initialized"]:
         print("Memory Corridor 项目：已初始化")
     else:
-        print("Memory Corridor 项目：未初始化（Hook 将按约定 no-op，不影响 Codex）")
+        print(f"Memory Corridor 项目：未初始化（Hook 将按约定 no-op，不影响 {label}）")
     if result["command_on_path"]:
         print("memory-corridor 命令：PATH 上可用")
     else:
-        print("memory-corridor 命令：PATH 上找不到（Codex 将无法调用 Hook，请先 pip install 本项目或激活对应 venv）")
-    print("Hook trust：unable to determine automatically（请在 Codex 中运行 /hooks 人工确认）")
+        print(f"memory-corridor 命令：PATH 上找不到（{label} 将无法调用 Hook，请先 pip install 本项目或激活对应 venv）")
+    print(f"Hook trust：unable to determine automatically（{trust_hint}）")
     return 0
 
 
-def _print_codex_uninstall(result: dict) -> int:
+def _print_codex_status(result: dict) -> int:
+    return _print_hook_status(CODEX_LABEL, "请在 Codex 中运行 /hooks 人工确认", result)
+
+
+def _print_hook_uninstall(result: dict) -> int:
     if result.get("absent"):
         print(f"{result['path']} 不存在，没有可卸载的 Memory Corridor Hook。")
         return 0
@@ -391,6 +425,10 @@ def _print_codex_uninstall(result: dict) -> int:
         print(f"上一版本备份：{result['backup']}")
     print("第三方 Hook 已保留。")
     return 0
+
+
+def _print_codex_uninstall(result: dict) -> int:
+    return _print_hook_uninstall(result)
 
 
 def _cmd_events(paths, args) -> int:
@@ -420,6 +458,26 @@ def _cmd_codex(paths, args) -> int:
         return _print_codex_status(result)
     if args.codex_command == "uninstall":
         return _print_codex_uninstall(codex_integration.uninstall_hooks(paths.root))
+    return 2
+
+
+def _cmd_claude(paths, args) -> int:
+    if args.claude_command == "hook":
+        return claude_integration.run_claude_hook_command()
+    if args.claude_command == "install":
+        return _print_hook_install(CLAUDE_LABEL, CLAUDE_TRUST_STEPS, claude_integration.install_claude_hooks(paths.root))
+    if args.claude_command == "status":
+        result = claude_integration.claude_hook_status(paths.root)
+        if args.as_json:
+            _print_json(result)
+            return 0
+        return _print_hook_status(
+            CLAUDE_LABEL,
+            "Claude Code 用工作区信任对话框管控项目 Hook；/hooks 菜单只读查看，-p 模式视为已信任",
+            result,
+        )
+    if args.claude_command == "uninstall":
+        return _print_hook_uninstall(claude_integration.uninstall_claude_hooks(paths.root))
     return 2
 
 
@@ -458,6 +516,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_events(paths, args)
         if args.top_command == "codex":
             return _cmd_codex(paths, args)
+        if args.top_command == "claude":
+            return _cmd_claude(paths, args)
         parser.error(f"未知命令: {args.top_command}")
     except (GuardError, OSError, ValueError) as exc:
         print(f"错误：{exc}", file=sys.stderr)

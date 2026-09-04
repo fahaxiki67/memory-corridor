@@ -5,6 +5,29 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.7.0] - 2026-09-05
+
+### 新增
+
+- **Claude Code 原生集成**（`memory-corridor claude hook/install/status/uninstall`）：与 Codex 集成共用同一事件处理器，写入 `<项目>/.claude/settings.json`（project scope）。
+  - 用户配置保护：settings.json 里你自己的 permissions、MCP、第三方 hook 原样保留；install 幂等；非法 JSON 拒改；单份 `.bak` 滚动备份；
+  - Claude handler 保持 `type/command/timeout` 最小字段集合（不写 Codex 专属的 statusMessage/additionalContextLimit）；
+  - status 含 matcher 漂移检测；trust 如实提示"工作区信任对话框管控，无公开接口自动判定"。
+- 重构：抽出通用 hook 配置引擎 `integrations/hook_config.py`，Codex 与 Claude 共用合并/卸载/状态检查逻辑；Codex 公开 API 与行为零变化。
+
+### 平台差异（按官方文档实现）
+
+- Claude Code 无逐 hook trust hash：以工作区信任对话框管控（`-p` 非交互模式视为已信任）；
+- PreCompact 的 `systemMessage` 会被 Claude Code 丢弃（恢复包落盘副作用不受影响）；
+- Stop 连续阻塞 8 次后平台强制结束回合；本工具的 `stop_hook_active` 防循环在其之前生效。
+
+### 测试
+
+- 新增 10 项 Claude 集成测试（配置管理对称套件 + hook 协议复用），总测试 77 项；Codex 侧 67 项回归无变化。
+
+## [2.6.0] - 2026-09-05(https://keepachangelog.com/zh-CN/1.1.0/)，
+版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
 ## [2.6.0] - 2026-09-05
 
 ### 新增

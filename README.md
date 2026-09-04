@@ -259,6 +259,26 @@ memory-corridor codex uninstall  # 只移除 Memory Corridor 的 Hook，第三�
 - state.json 损坏：Hook 不会把“读不了”当 pass——Stop 首次会阻塞并提示检查 `.context-guard/state.json`；请保留现场手工修复，程序不自动改写；
 - 想临时停用但保留记录：`memory-corridor off`（Stop Hook 会改为放行）。
 
+## Claude Code 原生集成
+
+Claude Code 的 hooks 与 Codex 同源，v2.7.0 起提供对称集成，事件处理器完全复用：
+
+```text
+memory-corridor claude install     # 写入 <项目>/.claude/settings.json（project scope）
+memory-corridor claude status [--json]
+memory-corridor claude uninstall
+memory-corridor claude hook        # Hook 统一入口（与 codex hook 同一处理器）
+```
+
+行为与差异要点：
+
+- PreCompact / SessionStart(`resume|compact`) / Stop 三个 Hook 的行为与 Codex 版一致：刷新恢复包、注入 `additionalContext`、Stop 门禁阻塞与防循环；
+- **用户配置保护**：`.claude/settings.json` 里你自己的 permissions、MCP 配置、第三方 hook 等内容原样保留；install 幂等，uninstall 只移除 Memory Corridor 的 hook；
+- **信任机制**：Claude Code 用工作区信任对话框管控项目 Hook（信任前不运行），`/hooks` 菜单只读查看；没有 Codex 那种逐 hook trust hash；
+- `claude -p` 非交互模式视为已信任，适合自动化验收；
+- PreCompact 的 `systemMessage` 会被 Claude Code 丢弃（恢复包落盘副作用不受影响）；handler 保持 `type/command/timeout` 最小字段集合；
+- Stop 连续阻塞 8 次后 Claude Code 会强制结束回合（平台内置兜底）；我们的 `stop_hook_active` 防循环在其之前就已生效。
+
 ## 五层设计
 
 | 模块 | 责任 |
