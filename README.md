@@ -168,9 +168,11 @@ context-guard gate check --json
 
 `cli` 只是入口，不保存另一套状态。数据真相只有 `.context-guard/state.json`；`notebook.md` 面向人读，`events.jsonl` 面向追踪。
 
-## 参考与许可边界
+## 设计归属
 
-设计上参考了 [GreenLv/codex-context-guard](https://github.com/GreenLv/codex-context-guard) 公开 README 和架构中关于“本地任务账本、bounded recovery、证据绑定、完成门禁”的思路；参考仓库标注为 Apache-2.0。本项目是独立的最小实现，没有复制其源文件、Hook 实现或大段代码。若未来直接移植其代码，应保留 Apache-2.0 许可证、版权/NOTICE 信息，并在修改文件中标明修改；本项目当前不依赖该仓库。
+记忆回廊是 fahaxiki67 个人主导、独立实现的跨 macOS / Windows 本地任务账本工具。项目代码、数据格式、CLI 和完成门禁均为本项目自有实现，运行时不依赖其他项目。
+
+设计上参考了开源社区关于长任务持久化、恢复包、验证证据和完成门禁的公开实践；相关思路可见 [GreenLv/codex-context-guard](https://github.com/GreenLv/codex-context-guard)。
 
 ## 测试
 
