@@ -138,7 +138,12 @@ class EdgeCaseTests(unittest.TestCase):
         self.assertIn("要求一", target.read_text(encoding="utf-8"))
 
     def test_version_consistency_and_cli_version_flag(self) -> None:
-        self.assertEqual(context_guard_lite.__version__, "2.1.0")
+        import tomllib
+
+        pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+        with pyproject.open("rb") as handle:
+            declared = tomllib.load(handle)["project"]["version"]
+        self.assertEqual(context_guard_lite.__version__, declared)
         with self.assertRaises(SystemExit) as ctx:
             main(["--version"])
         self.assertEqual(ctx.exception.code, 0)

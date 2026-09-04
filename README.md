@@ -15,7 +15,7 @@ Lite 2.0 是独立 CLI，不直接接管 Codex 的 compact/resume，也不声称
 3. 生成短的 recovery packet；
 4. 只有 requirement 标记为 `done` 且有当前版本的 `success evidence`，完成门禁才通过。
 
-这正是“旁边有个记事本”的最小可靠版本。未来如果要自动化，再增加 Codex Hook 适配层；核心账本不需要重写。
+这正是“旁边有个记事本”的最小可靠版本。v2.2.0 起通过一层薄的 Codex Hook 适配把同样的动作接入了 Codex 的 compact/resume 与停止阶段（见下方“Codex 原生集成”）；核心账本保持独立，没有 Codex 也照常可用。
 
 ## 目录结构
 
@@ -175,6 +175,73 @@ context-guard gate check --json
 
 [examples/task.md](examples/task.md) 是一个完整的最小示例：为小项目补充 CSV 导出功能，从初始化账本、记录 evidence 到最后通过门禁的全过程命令。
 
+## Codex 原生集成
+
+v2.2.0 起提供一层薄的 Codex Hook 适配（`context_guard_lite/integrations/codex.py`），在 context compact/resume 和停止阶段自动调用上面的五层能力。适配层只做协议翻译：`.context-guard/state.json` 仍是唯一业务真相，不会自动产生 evidence，不会解析 transcript，也不会替你把 requirement 改成 done。
+
+三个 Hook 均调用同一条命令 `memory-corridor codex hook`（stdin JSON 进、stdout JSON 出），因此 macOS / Windows 使用同一份配置。
+
+### 安装
+
+在项目目录（需要已 `pip install` 本项目，保证 `memory-corridor` 在 PATH 上）：
+
+```text
+memory-corridor codex install
+```
+
+它只会写入当前项目的 `.codex/hooks.json`（project scope），不改全局配置。生成：
+
+| Hook | matcher | 行为 |
+| --- | --- | --- |
+| `PreCompact` | `manual\|auto` | 刷新 `.context-guard/recovery.md`（未初始化项目 no-op，不创建文件） |
+| `SessionStart` | `resume\|compact` | 用最新 state 重建 Recovery Packet 并注入 `additionalContext` |
+| `Stop` | （无） | 检查完成门禁，blocked 时把精简阻塞清单作为 continuation 送回 |
+
+已有第三方 Hook 的项目请放心：install 会解析现有 JSON、完整保留第三方 entries、只追加自己的 Hook，写入前生成单份滚动备份 `hooks.json.bak`；原文件不是合法 JSON 时直接拒绝、不覆盖。重复执行 install 是幂等的。
+
+其他命令：
+
+```text
+memory-corridor codex status     # 检查配置、初始化状态、command 是否在 PATH
+memory-corridor codex uninstall  # 只移除 Memory Corridor 的 Hook，第三方保留
+```
+
+### /hooks trust
+
+安装完成 ≠ 已经生效。Codex 对项目级非托管 Hook 有 trust/review 机制，信任之前 Hook 会被静默跳过：
+
+1. 在项目目录启动 `codex`；
+2. 运行 `/hooks` 查看；
+3. review 并 trust Memory Corridor 的三个 Hook。
+
+程序不会绕过 Codex 的 hook trust，也不会替你改 trust 状态；`codex status` 里 trust 一栏显示 `unable to determine automatically`，请以 `/hooks` 的人工确认为准。
+
+### compact/resume 工作流
+
+```text
+（compact 发生前）PreCompact → recovery.md 落盘，UI 提示已刷新
+（resume / compact 后）SessionStart → 最新 Recovery Packet 注入新上下文
+```
+
+注意两点设计边界：`startup` 与 `clear` 不注入（用户可能就是想清空上下文）；恢复包始终由最新 state 现场重建，不读可能过期的 recovery.md。恢复的是结构化工作状态，不是聊天历史。
+
+### Stop completion gate
+
+模型尝试结束回合时，Stop Hook 调用 `gate check`：
+
+- 项目未初始化 / 保护已关闭 / gate pass → 正常放行，不影响 Codex 结束；
+- gate blocked → 返回 `decision: "block"`，reason 是精简的可执行清单（形如 `R001 (v1): - 状态为 open，不是 done`），Codex 会把它作为 continuation 继续推进；
+- blocked 且 `stop_hook_active=true`（本轮已被续过一次）→ 不再 block，改用 `systemMessage` 提示门禁仍未满足，避免无限循环。
+
+门禁的可信边界不变：Hook 只会阻塞“账本说没完成”的结束，永远不会自动证明“已完成”。
+
+### 排障
+
+- Hook 完全没运行：先跑 `memory-corridor codex status`；确认在 Codex 里 `/hooks` 已 trust；确认 `memory-corridor` 在 PATH 上（venv 用户需在激活 venv 的终端里启动 codex）；
+- `hooks.json` 被判断为非法 JSON：install/uninstall 会拒绝操作并保留现场，请先修复或用 `hooks.json.bak` 还原；
+- state.json 损坏：Hook 不会把“读不了”当 pass——Stop 首次会阻塞并提示检查 `.context-guard/state.json`；请保留现场手工修复，程序不自动改写；
+- 想临时停用但保留记录：`memory-corridor off`（Stop Hook 会改为放行）。
+
 ## 五层设计
 
 | 模块 | 责任 |
@@ -219,6 +286,7 @@ python3.11 -m unittest discover -s tests -p 'test_*.py'
 - 不把自然语言“看起来完成”当作证明；
 - 不自动替用户修改 requirements；
 - 不自动执行命令、安装依赖、上传云端或推送远端；
-- 不假装已经接入所有 Codex 生命周期 Hook。
+- 不假装已经接入所有 Codex 生命周期 Hook（当前只接 PreCompact / SessionStart(resume|compact) / Stop 三个）；
+- 不绕过 Codex 的 hook trust 机制。
 
-下一步最有价值的增强是增加一个很薄的 Codex Hook adapter：在 compact/resume 前后自动调用 `recovery packet`，在停止前自动调用 `gate check`。这属于外围适配，不应把五层核心重新做重。
+Codex Hook 适配已作为外围薄层落地（v2.2.0），五层核心没有被做重；后续增强同样只应发生在外围。

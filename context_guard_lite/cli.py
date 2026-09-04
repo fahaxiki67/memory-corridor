@@ -8,6 +8,7 @@ from pathlib import Path
 from .contract import GuardError, add_note, init_project, load_state, project_paths, set_enabled
 from .evidence import add_evidence, list_evidence
 from .gate import check_gate
+from .integrations import codex as codex_integration
 from .recovery import build_packet, write_packet
 from .requirements import KINDS, STATUSES, add_requirement, update_requirement
 
@@ -90,6 +91,13 @@ def _parser() -> argparse.ArgumentParser:
     note_add.add_argument("--source", default="manual")
     note_list = note_commands.add_parser("list", help="列出结构化笔记")
     note_list.add_argument("--limit", type=int, default=20)
+
+    codex = commands.add_parser("codex", help="Codex 原生 Hook 集成")
+    codex_commands = codex.add_subparsers(dest="codex_command", required=True)
+    codex_commands.add_parser("hook", help="处理 Codex Hook 事件（stdin JSON 进，stdout JSON 出）")
+    codex_commands.add_parser("install", help="把三个 Memory Corridor Hook 合并进 <项目>/.codex/hooks.json")
+    codex_commands.add_parser("status", help="检查 Codex Hook 安装状态")
+    codex_commands.add_parser("uninstall", help="只移除 Memory Corridor Hook，保留第三方 Hook")
 
     return parser
 
@@ -219,6 +227,86 @@ def _cmd_note(paths, args) -> int:
     return 0
 
 
+def _print_codex_trust_reminder() -> None:
+    print("注意：Codex 对项目级非托管 Hook 要求人工 review/trust，信任之前不会运行：")
+    print("1. 在项目目录启动 codex；")
+    print("2. 运行 /hooks 查看；")
+    print("3. 确认 Memory Corridor 三个 Hook（PreCompact / SessionStart / Stop）已识别并信任。")
+
+
+def _print_codex_install(result: dict) -> int:
+    if not result["written"]:
+        print(f"Codex Hook 已安装，本次未做任何修改：{result['path']}")
+        print(f"已存在：{', '.join(result['already'])}")
+        _print_codex_trust_reminder()
+        return 0
+    print(f"已写入：{result['path']}")
+    if result["backup"]:
+        print(f"上一版本备份：{result['backup']}")
+    for event in result["added"]:
+        print(f"- 已添加 {event}")
+    if result["already"]:
+        print(f"- 已存在，未重复添加：{', '.join(result['already'])}")
+    _print_codex_trust_reminder()
+    return 0
+
+
+def _print_codex_status(result: dict) -> int:
+    exists = "存在" if result["hooks_file_exists"] else "不存在"
+    print(f"Codex hooks 配置：{result['hooks_file']}（{exists}）")
+    if result["hooks_file_valid"] is False:
+        print(f"文件无法解析：{result['hooks_file_error']}")
+    for event in ("PreCompact", "SessionStart", "Stop"):
+        entry = result["events"].get(event)
+        if entry is None:
+            print(f"- {event}：文件不可读，无法确认")
+        elif entry["configured"]:
+            matcher = f"，matcher={entry['matcher']}" if entry["matcher"] else ""
+            suffix = "（同组含第三方 Hook）" if entry["third_party_present"] else ""
+            print(f"- {event}：已安装{matcher}{suffix}")
+        elif entry["third_party_present"]:
+            print(f"- {event}：仅第三方 Hook，Memory Corridor 未安装")
+        else:
+            print(f"- {event}：未安装")
+    if result["project_initialized"]:
+        print("Memory Corridor 项目：已初始化")
+    else:
+        print("Memory Corridor 项目：未初始化（Hook 将按约定 no-op，不影响 Codex）")
+    if result["command_on_path"]:
+        print("memory-corridor 命令：PATH 上可用")
+    else:
+        print("memory-corridor 命令：PATH 上找不到（Codex 将无法调用 Hook，请先 pip install 本项目或激活对应 venv）")
+    print("Hook trust：unable to determine automatically（请在 Codex 中运行 /hooks 人工确认）")
+    return 0
+
+
+def _print_codex_uninstall(result: dict) -> int:
+    if result.get("absent"):
+        print(f"{result['path']} 不存在，没有可卸载的 Memory Corridor Hook。")
+        return 0
+    if not result["written"]:
+        print("未发现 Memory Corridor Hook，未做任何修改。")
+        return 0
+    print(f"已更新：{result['path']}")
+    print(f"已移除：{', '.join(result['removed'])}")
+    if result["backup"]:
+        print(f"上一版本备份：{result['backup']}")
+    print("第三方 Hook 已保留。")
+    return 0
+
+
+def _cmd_codex(paths, args) -> int:
+    if args.codex_command == "hook":
+        return codex_integration.run_hook_command()
+    if args.codex_command == "install":
+        return _print_codex_install(codex_integration.install_hooks(paths.root))
+    if args.codex_command == "status":
+        return _print_codex_status(codex_integration.hook_status(paths.root))
+    if args.codex_command == "uninstall":
+        return _print_codex_uninstall(codex_integration.uninstall_hooks(paths.root))
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     _configure_output()
     parser = _parser()
@@ -250,6 +338,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_gate(paths, args)
         if args.top_command in {"note", "notebook"}:
             return _cmd_note(paths, args)
+        if args.top_command == "codex":
+            return _cmd_codex(paths, args)
         parser.error(f"未知命令: {args.top_command}")
     except (GuardError, OSError, ValueError) as exc:
         print(f"错误：{exc}", file=sys.stderr)

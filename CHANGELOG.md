@@ -5,6 +5,30 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.2.0] - 2026-09-04
+
+### 新增
+
+- Codex 原生 Hook 集成（`context_guard_lite/integrations/codex.py`，薄适配层）：
+  - `memory-corridor codex hook`：统一 Hook 入口，stdin 接收 Codex Hook JSON，按 `hook_event_name` dispatch，stdout 只输出合法 Hook JSON，诊断走 stderr；
+  - `PreCompact`：在 cwd 已初始化时刷新 `.context-guard/recovery.md`；未初始化时按约定 no-op，不创建任何文件；
+  - `SessionStart`（matcher `resume|compact`）：用最新 state 重建 Recovery Packet 并通过 `hookSpecificOutput.additionalContext` 注入；`startup`/`clear` 不注入；
+  - `Stop`：调用现有完成门禁。gate blocked 且 `stop_hook_active=false` 时返回 `decision=block` 加精简阻塞清单；`stop_hook_active=true` 时不再续命（防无限循环），改用 `systemMessage` 提示；未初始化/disabled/pass 均正常放行；
+  - 状态损坏时绝不把"无法判断"伪装为 pass，也不伪造 Recovery Packet。
+- `memory-corridor codex install` / `codex status` / `codex uninstall`（仅 project scope：`<项目>/.codex/hooks.json`）：
+  - install 幂等；已有第三方 Hook 完整保留，只追加 Memory Corridor 自己的 entries；
+  - 写入前生成单份滚动备份 `hooks.json.bak`（不无限生成）；
+  - 原文件不是合法 JSON 时拒绝操作、不覆盖；
+  - uninstall 只移除 Memory Corridor 的 Hook；
+  - status 如实显示 `trust: unable to determine automatically` 并提示 `/hooks` 人工确认；不绕过 Codex hook trust。
+- 新增测试文件 `tests/test_codex_integration.py`：Hook 行为 15 场景、协议错误处理、配置管理幂等与第三方保护共 30 项。
+
+### 明确不做（本轮边界）
+
+- 不做 PostToolUse 自动 evidence、不做 transcript 解析、不用 LLM 判断 requirement 是否完成、不自动修改 requirement；
+- 不默认改全局 `~/.codex/hooks.json` 或 config.toml；
+- 五层核心（contract/requirements/evidence/recovery/gate）业务语义零改动，`SCHEMA_VERSION` 保持 1。
+
 ## [2.1.0] - 2026-09-04
 
 ### 新增

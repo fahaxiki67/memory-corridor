@@ -1,0 +1,465 @@
+from __future__ import annotations
+
+import contextlib
+import io
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+@contextlib.contextmanager
+def _stdin_as(buffer: bytes):
+    original = sys.stdin
+    sys.stdin = io.BytesIO(buffer)
+    try:
+        yield
+    finally:
+        sys.stdin = original
+
+from context_guard_lite.cli import main
+from context_guard_lite.contract import GuardError, init_project, load_state, project_paths
+from context_guard_lite.evidence import add_evidence
+from context_guard_lite.integrations.codex import (
+    ADDITIONAL_CONTEXT_LIMIT,
+    HOOK_COMMAND,
+    PRE_COMPACT_MATCHER,
+    SESSION_START_MATCHER,
+    handle_hook_event,
+    hook_status,
+    install_hooks,
+    hooks_config_path,
+    uninstall_hooks,
+)
+from context_guard_lite.requirements import add_requirement, update_requirement
+
+
+def _pre_compact_payload(cwd: Path, trigger: str = "manual") -> dict:
+    return {
+        "hook_event_name": "PreCompact",
+        "cwd": str(cwd),
+        "session_id": "s-1",
+        "transcript_path": None,
+        "trigger": trigger,
+        "turn_id": "t-1",
+        "model": "gpt-5",
+    }
+
+
+def _session_start_payload(cwd: Path, source: str) -> dict:
+    return {
+        "hook_event_name": "SessionStart",
+        "cwd": str(cwd),
+        "session_id": "s-1",
+        "transcript_path": None,
+        "source": source,
+        "model": "gpt-5",
+        "permission_mode": "default",
+    }
+
+
+def _stop_payload(cwd: Path, stop_hook_active: bool = False) -> dict:
+    return {
+        "hook_event_name": "Stop",
+        "cwd": str(cwd),
+        "session_id": "s-1",
+        "transcript_path": None,
+        "stop_hook_active": stop_hook_active,
+        "turn_id": "t-1",
+        "last_assistant_message": None,
+        "model": "gpt-5",
+        "permission_mode": "default",
+    }
+
+
+class CodexHookHandlingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.paths = project_paths(self.root)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    # 场景 1：PreCompact + initialized → recovery.md 被刷新
+    def test_pre_compact_initialized_refreshes_recovery_md(self) -> None:
+        init_project(self.root, "compact-demo")
+        add_requirement(self.paths, "压缩前应保留的要求")
+        self.assertFalse(self.paths.recovery.exists())
+        outcome = handle_hook_event(_pre_compact_payload(self.root))
+        self.assertTrue(outcome.output["continue"])
+        self.assertTrue(self.paths.recovery.exists())
+        content = self.paths.recovery.read_text(encoding="utf-8")
+        self.assertIn("压缩前应保留的要求", content)
+        self.assertIn("compact-demo", content)
+
+    # 场景 2：PreCompact + uninitialized → no-op，不创建 .context-guard
+    def test_pre_compact_uninitialized_is_noop(self) -> None:
+        outcome = handle_hook_event(_pre_compact_payload(self.root))
+        self.assertTrue(outcome.output["continue"])
+        self.assertIsNone(outcome.output.get("systemMessage"))
+        self.assertFalse((self.root / ".context-guard").exists())
+
+    # 场景 3/4：SessionStart source=resume / compact → additionalContext
+    def test_session_start_resume_and_compact_inject_packet(self) -> None:
+        for source in ("resume", "compact"):
+            with self.subTest(source=source):
+                project = self.root / source
+                project.mkdir()
+                paths = project_paths(project)
+                init_project(project, f"resume-{source}")
+                add_requirement(paths, "恢复时必须看到的要求")
+                outcome = handle_hook_event(_session_start_payload(project, source))
+                specific = outcome.output["hookSpecificOutput"]
+                self.assertEqual(specific["hookEventName"], "SessionStart")
+                self.assertIn("恢复时必须看到的要求", specific["additionalContext"])
+                self.assertIn("Completion Gate", specific["additionalContext"])
+
+    # 场景 5/6：startup / clear → 不注入旧状态
+    def test_session_start_startup_and_clear_do_not_inject(self) -> None:
+        init_project(self.root, "no-inject")
+        add_requirement(self.paths, "不该被注入的要求")
+        for source in ("startup", "clear"):
+            with self.subTest(source=source):
+                outcome = handle_hook_event(_session_start_payload(self.root, source))
+                self.assertTrue(outcome.output["continue"])
+                self.assertNotIn("hookSpecificOutput", outcome.output)
+                self.assertNotIn("不该被注入的要求", json.dumps(outcome.output, ensure_ascii=False))
+
+    def test_session_start_uninitialized_is_noop(self) -> None:
+        outcome = handle_hook_event(_session_start_payload(self.root, "resume"))
+        self.assertTrue(outcome.output["continue"])
+        self.assertNotIn("hookSpecificOutput", outcome.output)
+        self.assertFalse((self.root / ".context-guard").exists())
+
+    # 场景 7：Stop + gate pass → 不 block
+    def test_stop_gate_pass_continues(self) -> None:
+        init_project(self.root, "pass")
+        requirement = add_requirement(self.paths, "已完成并验证")
+        add_evidence(self.paths, requirement["id"], "验证通过", "success")
+        update_requirement(self.paths, requirement["id"], status="done")
+        outcome = handle_hook_event(_stop_payload(self.root))
+        self.assertTrue(outcome.output["continue"])
+        self.assertNotIn("decision", outcome.output)
+
+    # 场景 8：Stop + gate disabled → 不 block
+    def test_stop_disabled_continues(self) -> None:
+        init_project(self.root, "disabled")
+        add_requirement(self.paths, "未完成但保护已关")
+        main(["--root", str(self.root), "off"])
+        outcome = handle_hook_event(_stop_payload(self.root))
+        self.assertTrue(outcome.output["continue"])
+        self.assertNotIn("decision", outcome.output)
+
+    # 场景 9：Stop + uninitialized → 不 block，不创建目录
+    def test_stop_uninitialized_continues(self) -> None:
+        outcome = handle_hook_event(_stop_payload(self.root))
+        self.assertTrue(outcome.output["continue"])
+        self.assertNotIn("decision", outcome.output)
+        self.assertFalse((self.root / ".context-guard").exists())
+
+    # 场景 10：Stop + requirement open → block，含 Rxxx
+    def test_stop_open_requirement_blocks(self) -> None:
+        init_project(self.root, "blocked-open")
+        add_requirement(self.paths, "还没做完的要求")
+        outcome = handle_hook_event(_stop_payload(self.root))
+        self.assertEqual(outcome.output["decision"], "block")
+        reason = outcome.output["reason"]
+        self.assertIn("Memory Corridor completion gate is blocked", reason)
+        self.assertIn("R001", reason)
+        self.assertIn("Resolve these blockers", reason)
+
+    # 场景 11：Stop + done 但无当前 revision success evidence → block
+    def test_stop_done_without_current_evidence_blocks(self) -> None:
+        init_project(self.root, "blocked-no-evidence")
+        requirement = add_requirement(self.paths, "标记了完成但没有证据")
+        update_requirement(self.paths, requirement["id"], status="done")
+        outcome = handle_hook_event(_stop_payload(self.root))
+        self.assertEqual(outcome.output["decision"], "block")
+        self.assertIn("R001", outcome.output["reason"])
+
+    # 场景 12：Stop + 当前 revision 最新 evidence=failed → block
+    def test_stop_latest_failed_evidence_blocks(self) -> None:
+        init_project(self.root, "blocked-failed")
+        requirement = add_requirement(self.paths, "最新一次验证失败")
+        add_evidence(self.paths, requirement["id"], "验证失败", "failed")
+        update_requirement(self.paths, requirement["id"], status="done")
+        outcome = handle_hook_event(_stop_payload(self.root))
+        self.assertEqual(outcome.output["decision"], "block")
+        self.assertIn("R001", outcome.output["reason"])
+
+    # 场景 13：Stop + 当前 revision 最新 evidence=success → pass
+    def test_stop_latest_success_evidence_passes(self) -> None:
+        init_project(self.root, "success")
+        requirement = add_requirement(self.paths, "最新一次验证成功")
+        add_evidence(self.paths, requirement["id"], "验证通过", "success")
+        update_requirement(self.paths, requirement["id"], status="done")
+        outcome = handle_hook_event(_stop_payload(self.root))
+        self.assertTrue(outcome.output["continue"])
+        self.assertNotIn("decision", outcome.output)
+
+    # 场景 14：Stop + stop_hook_active=true → 不再产生无限 continuation block
+    def test_stop_hook_active_does_not_block_again(self) -> None:
+        init_project(self.root, "loop-guard")
+        add_requirement(self.paths, "仍然未完成")
+        outcome = handle_hook_event(_stop_payload(self.root, stop_hook_active=True))
+        self.assertTrue(outcome.output["continue"])
+        self.assertNotIn("decision", outcome.output)
+        self.assertIn("blocked", outcome.output["systemMessage"])
+        self.assertIn("R001", outcome.output["systemMessage"])
+
+    # 状态损坏：不得把“无法判断”当作 pass
+    def test_stop_corrupt_state_is_not_treated_as_pass(self) -> None:
+        init_project(self.root, "corrupt")
+        self.paths.state.write_text("{broken json", encoding="utf-8")
+        outcome = handle_hook_event(_stop_payload(self.root, stop_hook_active=False))
+        self.assertEqual(outcome.output["decision"], "block")
+        self.assertIn("could not be read", outcome.output["reason"])
+        second = handle_hook_event(_stop_payload(self.root, stop_hook_active=True))
+        self.assertTrue(second.output["continue"])
+        self.assertNotIn("decision", second.output)
+        self.assertIn("unreadable", second.output["systemMessage"])
+
+    def test_session_start_corrupt_state_does_not_fake_packet(self) -> None:
+        init_project(self.root, "corrupt-resume")
+        self.paths.state.write_text("not json at all", encoding="utf-8")
+        outcome = handle_hook_event(_session_start_payload(self.root, "resume"))
+        self.assertTrue(outcome.output["continue"])
+        self.assertNotIn("hookSpecificOutput", outcome.output)
+        self.assertIn("systemMessage", outcome.output)
+
+    def test_pre_compact_corrupt_state_does_not_raise_or_overwrite(self) -> None:
+        init_project(self.root, "corrupt-compact")
+        self.paths.state.write_text("[", encoding="utf-8")
+        outcome = handle_hook_event(_pre_compact_payload(self.root))
+        self.assertTrue(outcome.output["continue"])
+        self.assertFalse(self.paths.recovery.exists())
+        self.assertIn("systemMessage", outcome.output)
+
+
+class CodexHookProtocolTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    # 场景 15：stdin 非法 JSON → 明确错误，stdout 不产生伪合法 Hook 结果
+    def test_invalid_stdin_json_fails_cleanly(self) -> None:
+        with _stdin_as(b"{not json"):
+            with contextlib.redirect_stdout(io.StringIO()) as fake_out:
+                with contextlib.redirect_stderr(io.StringIO()) as fake_err:
+                    code = main(["codex", "hook"])
+        self.assertEqual(code, 1)
+        self.assertEqual(fake_out.getvalue(), "")
+        self.assertIn("不是合法 JSON", fake_err.getvalue())
+
+    def test_missing_hook_event_name_fails_cleanly(self) -> None:
+        with _stdin_as(b'{"cwd": "/tmp"}'):
+            with contextlib.redirect_stdout(io.StringIO()) as fake_out:
+                with contextlib.redirect_stderr(io.StringIO()) as fake_err:
+                    code = main(["codex", "hook"])
+        self.assertEqual(code, 1)
+        self.assertEqual(fake_out.getvalue(), "")
+        self.assertIn("hook_event_name", fake_err.getvalue())
+
+    def test_unknown_event_fails_cleanly(self) -> None:
+        payload = json.dumps({"hook_event_name": "SessionEnd", "cwd": str(self.root)}).encode("utf-8")
+        with _stdin_as(payload):
+            with contextlib.redirect_stdout(io.StringIO()) as fake_out:
+                with contextlib.redirect_stderr(io.StringIO()) as fake_err:
+                    code = main(["codex", "hook"])
+        self.assertEqual(code, 1)
+        self.assertEqual(fake_out.getvalue(), "")
+        self.assertIn("不支持的 hook_event_name", fake_err.getvalue())
+
+    def test_stop_block_via_cli_stdout_is_valid_json(self) -> None:
+        init_project(self.root, "cli-stop")
+        add_requirement(project_paths(self.root), "CLI 链路验证")
+        payload = json.dumps(_stop_payload(self.root)).encode("utf-8")
+        with _stdin_as(payload):
+            with contextlib.redirect_stdout(io.StringIO()) as fake_out:
+                with contextlib.redirect_stderr(io.StringIO()):
+                    code = main(["codex", "hook"])
+        self.assertEqual(code, 0)
+        parsed = json.loads(fake_out.getvalue())
+        self.assertEqual(parsed["decision"], "block")
+        self.assertIn("R001", parsed["reason"])
+
+
+class CodexConfigTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.hooks_path = hooks_config_path(self.root)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _install_via_cli(self) -> None:
+        self.assertEqual(main(["--root", str(self.root), "codex", "install"]), 0)
+
+    def _load_config(self) -> dict:
+        return json.loads(self.hooks_path.read_text(encoding="utf-8"))
+
+    # 场景 16：install 到没有 .codex/hooks.json 的项目 → 正确生成
+    def test_install_creates_file_with_three_hooks(self) -> None:
+        self._install_via_cli()
+        self.assertTrue(self.hooks_path.exists())
+        hooks = self._load_config()["hooks"]
+        self.assertEqual(set(hooks), {"PreCompact", "SessionStart", "Stop"})
+        self.assertEqual(hooks["PreCompact"][0]["matcher"], PRE_COMPACT_MATCHER)
+        self.assertEqual(hooks["SessionStart"][0]["matcher"], SESSION_START_MATCHER)
+        self.assertNotIn("matcher", hooks["Stop"][0])
+        stop_handler = hooks["Stop"][0]["hooks"][0]
+        self.assertEqual(stop_handler["type"], "command")
+        self.assertEqual(stop_handler["command"], HOOK_COMMAND)
+        session_handler = hooks["SessionStart"][0]["hooks"][0]
+        self.assertEqual(session_handler["additionalContextLimit"], ADDITIONAL_CONTEXT_LIMIT)
+        self.assertNotIn("additionalContextLimit", stop_handler)
+
+    # 场景 17：install 到已有第三方 hooks 的项目 → 第三方配置完整保留
+    def test_install_preserves_third_party_hooks(self) -> None:
+        third_party = {
+            "description": "my own hooks",
+            "hooks": {
+                "PreCompact": [
+                    {"matcher": "manual", "hooks": [{"type": "command", "command": "python backup.py"}]},
+                ],
+                "Stop": [
+                    {"hooks": [{"type": "command", "command": "notify.exe --sound ding"}]},
+                ],
+                "SessionEnd": [
+                    {"hooks": [{"type": "command", "command": "cleanup.sh"}]},
+                ],
+            },
+        }
+        self.hooks_path.parent.mkdir(parents=True)
+        self.hooks_path.write_text(json.dumps(third_party, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._install_via_cli()
+        merged = self._load_config()
+        self.assertEqual(merged["description"], "my own hooks")
+        self.assertEqual(
+            merged["hooks"]["PreCompact"][0]["hooks"][0]["command"], "python backup.py"
+        )
+        self.assertEqual(
+            merged["hooks"]["Stop"][0]["hooks"][0]["command"], "notify.exe --sound ding"
+        )
+        self.assertEqual(merged["hooks"]["SessionEnd"], third_party["hooks"]["SessionEnd"])
+        backup = Path(str(self.hooks_path) + ".bak")
+        self.assertTrue(backup.exists())
+        self.assertEqual(json.loads(backup.read_text(encoding="utf-8")), third_party)
+
+    # 场景 18：重复 install → 不重复添加
+    def test_install_is_idempotent(self) -> None:
+        self._install_via_cli()
+        first = self._load_config()
+        self._install_via_cli()
+        second = self._load_config()
+        self.assertEqual(first, second)
+        for event in ("PreCompact", "SessionStart", "Stop"):
+            handlers = [
+                handler
+                for group in first["hooks"][event]
+                for handler in group["hooks"]
+                if handler.get("command") == HOOK_COMMAND
+            ]
+            self.assertEqual(len(handlers), 1, event)
+
+    # 场景 19：uninstall → 只移除 Memory Corridor Hook
+    def test_uninstall_removes_only_memory_corridor_hooks(self) -> None:
+        third_party = {
+            "hooks": {
+                "Stop": [
+                    {"hooks": [{"type": "command", "command": "notify.exe"}]},
+                ],
+            },
+        }
+        self.hooks_path.parent.mkdir(parents=True)
+        self.hooks_path.write_text(json.dumps(third_party), encoding="utf-8")
+        self._install_via_cli()
+        self.assertEqual(main(["--root", str(self.root), "codex", "uninstall"]), 0)
+        config = self._load_config()
+        self.assertEqual(config["hooks"]["Stop"], third_party["hooks"]["Stop"])
+        dumped = json.dumps(config)
+        self.assertNotIn(HOOK_COMMAND, dumped)
+        for handler in config["hooks"]["Stop"][0]["hooks"]:
+            self.assertEqual(handler["command"], "notify.exe")
+
+    def test_uninstall_is_idempotent_and_handles_absent_file(self) -> None:
+        self.assertEqual(main(["--root", str(self.root), "codex", "uninstall"]), 0)
+        self._install_via_cli()
+        self.assertEqual(main(["--root", str(self.root), "codex", "uninstall"]), 0)
+        self.assertNotIn(HOOK_COMMAND, self.hooks_path.read_text(encoding="utf-8"))
+        self.assertEqual(main(["--root", str(self.root), "codex", "uninstall"]), 0)
+
+    def test_install_refuses_to_touch_invalid_json(self) -> None:
+        self.hooks_path.parent.mkdir(parents=True)
+        self.hooks_path.write_text("{broken", encoding="utf-8")
+        with contextlib.redirect_stderr(io.StringIO()):
+            code = main(["--root", str(self.root), "codex", "install"])
+        self.assertEqual(code, 2)
+        self.assertEqual(self.hooks_path.read_text(encoding="utf-8"), "{broken")
+        self.assertFalse(Path(str(self.hooks_path) + ".bak").exists())
+
+    def test_status_reports_configuration(self) -> None:
+        status = hook_status(self.root)
+        self.assertFalse(status["hooks_file_exists"])
+        self.assertFalse(status["project_initialized"])
+        self.assertEqual(status["trust"], "unable to determine automatically")
+        self._install_via_cli()
+        status = hook_status(self.root)
+        self.assertTrue(status["hooks_file_exists"])
+        self.assertTrue(status["hooks_file_valid"])
+        for event in ("PreCompact", "SessionStart", "Stop"):
+            self.assertTrue(status["events"][event]["configured"], event)
+        self.assertFalse(status["events"]["Stop"]["third_party_present"])
+
+    # 场景 20/21：不依赖 bash/PowerShell 路径语法；含空格路径正常
+    def test_paths_with_spaces_work_without_shell_syntax(self) -> None:
+        spaced = Path(tempfile.mkdtemp(prefix="memory corridor 空格 "))
+        try:
+            init_project(spaced, "spaced-project")
+            self.assertEqual(main(["--root", str(spaced), "codex", "install"]), 0)
+            outcome = handle_hook_event(_pre_compact_payload(spaced))
+            self.assertTrue(outcome.output["continue"])
+            paths = project_paths(spaced)
+            self.assertTrue(paths.recovery.exists())
+            stop = handle_hook_event(_stop_payload(spaced))
+            self.assertEqual(stop.output["decision"], "block")
+            config = json.loads(hooks_config_path(spaced).read_text(encoding="utf-8"))
+            command = config["hooks"]["Stop"][0]["hooks"][0]["command"]
+            self.assertEqual(command, HOOK_COMMAND)
+            self.assertNotIn("sh -c", command)
+            self.assertNotIn("powershell", command.lower())
+        finally:
+            import shutil as _shutil
+
+            _shutil.rmtree(spaced, ignore_errors=True)
+
+    def test_uninitialized_hook_via_full_real_payload_shape(self) -> None:
+        # 使用与官方 schema 相同的完整 required 字段集合验证真实 payload 兼容。
+        payload = {
+            "hook_event_name": "Stop",
+            "cwd": str(self.root),
+            "session_id": "a1b2c3",
+            "transcript_path": None,
+            "stop_hook_active": False,
+            "turn_id": "turn-9",
+            "last_assistant_message": "I think I am done.",
+            "model": "gpt-5.2",
+            "permission_mode": "acceptEdits",
+        }
+        outcome = handle_hook_event(payload)
+        self.assertTrue(outcome.output["continue"])
+        self.assertNotIn("decision", outcome.output)
+
+    def test_load_state_guard_error_is_the_base_for_hook_conservatism(self) -> None:
+        with self.assertRaises(GuardError):
+            load_state(project_paths(self.root))
+
+
+if __name__ == "__main__":
+    unittest.main()
