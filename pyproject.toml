@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memory-corridor"
+version = "2.0.0"
+description = "记忆回廊：面向长 AI 任务的本地任务账本与完成门禁"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+memory-corridor = "context_guard_lite.cli:main"
+context-guard = "context_guard_lite.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["context_guard_lite*"]

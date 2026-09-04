@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.venv/
+
+# The local ledger can contain task text and should not be committed by accident.
+# Remove this line if the project intentionally versions its notebook.
+.context-guard/
+
