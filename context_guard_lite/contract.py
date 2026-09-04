@@ -4,9 +4,8 @@ import json
 import os
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-
 
 APP_DIR_NAME = ".context-guard"
 SCHEMA_VERSION = 1
@@ -40,7 +39,7 @@ def project_paths(root: Path | str | None = None) -> ProjectPaths:
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _one_line(value: str) -> str:

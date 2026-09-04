@@ -25,7 +25,6 @@ from ..contract import GuardError, ProjectPaths, atomic_write, project_paths
 from ..gate import check_gate
 from ..recovery import build_packet, write_packet
 
-
 HOOK_COMMAND = "memory-corridor codex hook"
 HOOK_TYPE = "command"
 HOOK_TIMEOUT_SECONDS = 30

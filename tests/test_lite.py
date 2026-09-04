@@ -1,18 +1,19 @@
 from __future__ import annotations
 
+import io
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from context_guard_lite.contract import GuardError, add_note, init_project, load_state, project_paths
+import context_guard_lite
 from context_guard_lite.cli import main
+from context_guard_lite.contract import GuardError, add_note, init_project, load_state, project_paths, read_events
 from context_guard_lite.evidence import add_evidence
 from context_guard_lite.gate import check_gate
 from context_guard_lite.recovery import build_packet, write_packet
 from context_guard_lite.requirements import KINDS, STATUSES, add_requirement, update_requirement
-
-import context_guard_lite
 
 
 class ContextGuardLiteTests(unittest.TestCase):
@@ -222,8 +223,8 @@ class LedgerQueryTests(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def _list_output(self, argv: list[str]) -> str:
-        import io as _io
         import contextlib as _contextlib
+        import io as _io
 
         with _contextlib.redirect_stdout(_io.StringIO()) as fake:
             self.assertEqual(main(argv), 0)
@@ -292,8 +293,8 @@ class LedgerQueryTests(unittest.TestCase):
         self.assertIn("暂无匹配的事件", empty)
 
     def test_events_list_requires_initialized_project(self) -> None:
-        import io as _io
         import contextlib as _contextlib
+        import io as _io
 
         bare = Path(self.temp_dir.name) / "bare"
         bare.mkdir()
@@ -303,8 +304,8 @@ class LedgerQueryTests(unittest.TestCase):
     def test_gate_check_text_output_caps_and_all_flag(self) -> None:
         for index in range(1, 26):
             add_requirement(self.paths, f"阻塞要求 {index:02d}")
-        import io as _io
         import contextlib as _contextlib
+        import io as _io
 
         with _contextlib.redirect_stdout(_io.StringIO()) as capped:
             self.assertEqual(main(["--root", str(self.root), "gate", "check"]), 1)
@@ -324,8 +325,8 @@ class LedgerQueryTests(unittest.TestCase):
         self.assertEqual(len(parsed["blocking"]), 25)
 
     def test_status_reports_recovery_packet_freshness(self) -> None:
-        import io as _io
         import contextlib as _contextlib
+        import io as _io
 
         with _contextlib.redirect_stdout(_io.StringIO()) as before:
             self.assertEqual(main(["--root", str(self.root), "status"]), 0)
@@ -342,6 +343,72 @@ class LedgerQueryTests(unittest.TestCase):
             self.assertEqual(main(["--root", str(self.root), "status", "--json"]), 0)
         parsed = json.loads(as_json.getvalue())
         self.assertTrue(parsed["recovery_generated_at"].endswith("Z"))
+
+    def test_import_requirements_from_lines(self) -> None:
+        from context_guard_lite.requirements import import_requirements
+
+        lines = [
+            "第一条要求",
+            "   ",
+            "# 这是注释行",
+            "  第二条要求（前导空白会被折叠）  ",
+        ]
+        result = import_requirements(self.paths, lines, kind="must")
+        self.assertEqual(len(result["imported"]), 2)
+        self.assertEqual(result["skipped"], 2)
+        self.assertEqual([item["id"] for item in result["imported"]], ["R001", "R002"])
+
+        events = read_events(self.paths, event_type="requirement.add")
+        imported_flags = [event.get("imported") for event in events if event.get("id") in {"R001", "R002"}]
+        self.assertEqual(imported_flags, [True, True])
+
+    def test_import_cli_from_file_with_bom(self) -> None:
+        import contextlib as _contextlib
+        import io as _io
+
+        source = self.root / "tasks.txt"
+        source.write_bytes(b"\xef\xbb\xbf" + "第一条导入\n\n# 注释\n第二条导入\n".encode())
+        with _contextlib.redirect_stdout(_io.StringIO()) as out:
+            self.assertEqual(main(["--root", str(self.root), "requirements", "import", str(source)]), 0)
+        self.assertIn("导入 2 条，跳过 2 行", out.getvalue())
+        items = load_state(self.paths)["requirements"]
+        self.assertEqual([item["text"] for item in items], ["第一条导入", "第二条导入"])
+
+    def test_import_cli_stdin_and_missing_file(self) -> None:
+        import contextlib as _contextlib
+        import io as _io
+
+        original_stdin = sys.stdin
+        sys.stdin = io.BytesIO("来自 stdin 的要求\n".encode())
+        try:
+            with _contextlib.redirect_stdout(_io.StringIO()):
+                self.assertEqual(main(["--root", str(self.root), "requirements", "import", "-"]), 0)
+        finally:
+            sys.stdin = original_stdin
+        self.assertEqual(load_state(self.paths)["requirements"][0]["text"], "来自 stdin 的要求")
+
+        with _contextlib.redirect_stderr(_io.StringIO()):
+            self.assertEqual(main(["--root", str(self.root), "requirements", "import", "no-such-file.txt"]), 2)
+
+    def test_recovery_packet_max_done_flag(self) -> None:
+        import contextlib as _contextlib
+        import io as _io
+
+        for index in range(1, 6):
+            requirement = add_requirement(self.paths, f"完成项 {index}")
+            add_evidence(self.paths, requirement["id"], "通过", "success")
+            update_requirement(self.paths, requirement["id"], status="done")
+
+        with _contextlib.redirect_stdout(_io.StringIO()) as zero:
+            self.assertEqual(main(["--root", str(self.root), "recovery", "packet", "--max-done", "0"]), 0)
+        self.assertIn("列出最近 0 条", zero.getvalue())
+        completed_zero = zero.getvalue().split("## 已完成")[1].split("## 最近 evidence")[0]
+        self.assertNotIn("完成项 5", completed_zero)
+
+        with _contextlib.redirect_stdout(_io.StringIO()) as three:
+            self.assertEqual(main(["--root", str(self.root), "recovery", "packet", "--max-done", "3"]), 0)
+        completed_three = three.getvalue().split("## 已完成")[1].split("## 最近 evidence")[0]
+        self.assertEqual(completed_three.count("[x]"), 3)
 
 
 if __name__ == "__main__":

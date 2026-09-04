@@ -3,7 +3,6 @@ from __future__ import annotations
 from .contract import GuardError, ProjectPaths, append_event, append_notebook, load_state, save_state, utc_now
 from .requirements import get_requirement
 
-
 RESULTS = {"success", "failed", "unknown"}
 
 

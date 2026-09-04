@@ -114,7 +114,10 @@ context-guard requirements add "新增两个测试" --kind acceptance
 context-guard requirements list
 context-guard requirements update R001 --status done
 context-guard requirements update R002 --text "新增两个单元测试" --reason "用户补充了验收口径"
+context-guard requirements import tasks.txt --kind must
 ```
+
+批量初始化账本可用 `requirements import`：每行一条要求，空行与 `#` 注释行跳过，`-` 表示从 stdin 读入；导入只在最后保存一次 state，事件日志逐条带 `imported` 标记。
 
 类型只有三种：
 

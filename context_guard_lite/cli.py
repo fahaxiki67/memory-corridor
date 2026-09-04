@@ -4,18 +4,16 @@ import argparse
 import json
 import shutil
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
+from . import __version__
 from .contract import GuardError, add_note, init_project, load_state, project_paths, read_events, set_enabled
 from .evidence import add_evidence, list_evidence
 from .gate import check_gate
 from .integrations import codex as codex_integration
 from .recovery import build_packet, write_packet
-from .requirements import KINDS, STATUSES, add_requirement, update_requirement
-
-from . import __version__
-
+from .requirements import KINDS, STATUSES, add_requirement, import_requirements, update_requirement
 
 NOTE_KINDS = {"experience", "decision", "lesson", "note"}
 
@@ -53,6 +51,11 @@ def _parser() -> argparse.ArgumentParser:
     req_add = requirement_commands.add_parser("add", help="新增 requirement")
     req_add.add_argument("text")
     req_add.add_argument("--kind", choices=sorted(KINDS), default="must")
+    req_import = requirement_commands.add_parser(
+        "import", help="从文本批量导入 requirements（每行一条，空行与 # 注释行跳过）"
+    )
+    req_import.add_argument("file", help="UTF-8 文本路径（容忍 BOM），或 - 表示 stdin")
+    req_import.add_argument("--kind", choices=sorted(KINDS), default="must")
     req_list = requirement_commands.add_parser("list", help="列出 requirements")
     req_list.add_argument("--json", action="store_true", dest="as_json")
     req_list.add_argument("--kind", help="只列出指定类型的 requirements")
@@ -82,6 +85,9 @@ def _parser() -> argparse.ArgumentParser:
     recovery_packet.add_argument("--out", type=Path, help="输出文件，默认 .context-guard/recovery.md")
     recovery_packet.add_argument("--max-evidence", type=int, default=10)
     recovery_packet.add_argument("--notebook-lines", type=int, default=20)
+    recovery_packet.add_argument(
+        "--max-done", type=int, default=20, help="已验证完成项最多列出条数（默认 20，0=只显示汇总）"
+    )
 
     gate = commands.add_parser("gate", help="检查完成门禁")
     gate_commands = gate.add_subparsers(dest="gate_command", required=True)
@@ -127,7 +133,7 @@ def _cmd_status(paths, as_json: bool) -> int:
     recovery_generated_at = None
     if paths.recovery.exists():
         recovery_generated_at = datetime.fromtimestamp(
-            paths.recovery.stat().st_mtime, tz=timezone.utc
+            paths.recovery.stat().st_mtime, tz=UTC
         ).isoformat(timespec="seconds").replace("+00:00", "Z")
     result = {
         "project": state["project"],
@@ -163,6 +169,26 @@ def _cmd_requirements(paths, args) -> int:
     if args.requirements_command == "add":
         requirement = add_requirement(paths, args.text, args.kind)
         print(f"已新增 {requirement['id']} v{requirement['revision']}：{requirement['text']}")
+        return 0
+    if args.requirements_command == "import":
+        if args.file == "-":
+            raw = sys.stdin.read()
+            if isinstance(raw, bytes):
+                # 嵌入方可能以二进制流注入 stdin（如 BytesIO），与文本模式一致按 UTF-8 处理。
+                raw = raw.decode("utf-8", errors="replace")
+            lines = raw.splitlines()
+            source = "stdin"
+        else:
+            file_path = Path(args.file).expanduser()
+            if not file_path.is_file():
+                raise GuardError(f"文件不存在: {file_path}")
+            # utf-8-sig：容忍 Windows 记事本留下的 UTF-8 BOM。
+            lines = file_path.read_text(encoding="utf-8-sig").splitlines()
+            source = str(file_path)
+        result = import_requirements(paths, lines, kind=args.kind)
+        print(f"已从 {source} 导入 {len(result['imported'])} 条，跳过 {result['skipped']} 行（空行/注释）。")
+        for requirement in result["imported"]:
+            print(f"- {requirement['id']}：{requirement['text']}")
         return 0
     if args.requirements_command == "list":
         items = load_state(paths)["requirements"]
@@ -218,7 +244,12 @@ def _cmd_evidence(paths, args) -> int:
 
 
 def _cmd_recovery(paths, args) -> int:
-    packet = build_packet(paths, max_evidence=args.max_evidence, notebook_lines=args.notebook_lines)
+    packet = build_packet(
+        paths,
+        max_evidence=args.max_evidence,
+        notebook_lines=args.notebook_lines,
+        max_done_requirements=args.max_done,
+    )
     target = write_packet(
         paths,
         out=args.out,

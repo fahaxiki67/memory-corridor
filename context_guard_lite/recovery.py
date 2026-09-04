@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .contract import GuardError, ProjectPaths, atomic_write, load_state, notebook_tail
+from .contract import ProjectPaths, atomic_write, load_state, notebook_tail
 from .gate import check_gate
 
 

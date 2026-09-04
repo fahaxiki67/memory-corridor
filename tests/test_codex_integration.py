@@ -9,6 +9,20 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from context_guard_lite.cli import main
+from context_guard_lite.contract import GuardError, init_project, load_state, project_paths
+from context_guard_lite.evidence import add_evidence
+from context_guard_lite.integrations.codex import (
+    ADDITIONAL_CONTEXT_LIMIT,
+    HOOK_COMMAND,
+    PRE_COMPACT_MATCHER,
+    SESSION_START_MATCHER,
+    handle_hook_event,
+    hook_status,
+    hooks_config_path,
+)
+from context_guard_lite.requirements import add_requirement, update_requirement
+
 
 class _FakeTTY(io.BytesIO):
     def isatty(self) -> bool:
@@ -25,22 +39,6 @@ def _stdin_as(buffer):
         yield
     finally:
         sys.stdin = original
-
-from context_guard_lite.cli import main
-from context_guard_lite.contract import GuardError, init_project, load_state, project_paths
-from context_guard_lite.evidence import add_evidence
-from context_guard_lite.integrations.codex import (
-    ADDITIONAL_CONTEXT_LIMIT,
-    HOOK_COMMAND,
-    PRE_COMPACT_MATCHER,
-    SESSION_START_MATCHER,
-    handle_hook_event,
-    hook_status,
-    install_hooks,
-    hooks_config_path,
-    uninstall_hooks,
-)
-from context_guard_lite.requirements import add_requirement, update_requirement
 
 
 def _pre_compact_payload(cwd: Path, trigger: str = "manual") -> dict:

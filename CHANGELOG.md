@@ -5,6 +5,25 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.5.0] - 2026-09-05
+
+### 新增
+
+- `requirements import <file|->`：从 UTF-8 文本批量导入 requirements（每行一条，空行与 `#` 注释行跳过；容忍 BOM；`-` 表示 stdin）。批量导入只保存一次 state，避免写放大；事件日志逐条带 `imported: true` 标记，保持审计粒度。
+- `recovery packet --max-done N`：把 v2.3.1 引入的已完成项折叠上限暴露到 CLI（默认 20，`0` 表示只显示汇总）。
+- 新增 `ruff` 静态检查（CI 独立 lint job；仅开发期工具，运行时保持零依赖）。
+
+### 修复
+
+- `requirements import -` 在 stdin 为二进制流时不再把字节串当作文本导入（与 `codex hook` 相同的 UTF-8 兼容处理）。
+
+### 测试
+
+- 新增 7 项测试（批量导入解析/BOM/管道/文件缺失、--max-done 折叠边界），总测试 65 项；全库通过 ruff 检查。
+
+## [2.4.0] - 2026-09-05(https://keepachangelog.com/zh-CN/1.1.0/)，
+版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
 ## [2.4.0] - 2026-09-05
 
 本版延续实验数据复查：events.jsonl 双进程并发追加（各 200 行，401/401 全部合法零丢失——追加日志比账本状态抗并发）、5000 条账本极限（gate 16ms / packet 36ms，性能无虞）、200 条阻塞项输出量化。
@@ -17,7 +36,7 @@
 
 ### 测试
 
-- 新增 4 项测试（gate 截断/--all/--json 全量、status 恢复包新鲜度、codex status --json），总测试 62 项。
+- 新增 3 项测试（gate check 截断与 --all/--json 全量、status 恢复包新鲜度、codex status --json），总测试 61 项。
 
 ## [2.3.1] - 2026-09-05(https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
