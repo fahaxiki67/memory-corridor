@@ -153,6 +153,62 @@ class EdgeCaseTests(unittest.TestCase):
         self.assertEqual(STATUSES, {"open", "blocked", "done", "superseded"})
 
 
+class RecoveryPacketTests(unittest.TestCase):
+    """恢复包分层：已验证完成项折叠，未满足项（含证据不合格的 done）保持全列。"""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        init_project(self.root, "packet-fold")
+        self.paths = project_paths(self.root)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_recovery_packet_folds_completed_requirements(self) -> None:
+        for index in range(1, 26):
+            requirement = add_requirement(self.paths, f"已完成要求 {index:02d}")
+            add_evidence(self.paths, requirement["id"], f"证据 {index:02d}", "success")
+            update_requirement(self.paths, requirement["id"], status="done")
+        pending_one = add_requirement(self.paths, "待办甲")
+        pending_two = add_requirement(self.paths, "待办乙")
+
+        packet = build_packet(self.paths)
+        self.assertIn("待办甲", packet)
+        self.assertIn("待办乙", packet)
+        self.assertIn("25 项已验证，列出最近 20 条", packet)
+        self.assertIn("另有 5 项见 state.json", packet)
+        # 最早的已完成项被折叠，最近 20 条保留
+        self.assertNotIn("已完成要求 01\n", packet)
+        self.assertNotIn("已完成要求 05", packet)
+        self.assertIn("已完成要求 25", packet)
+        # satisfied 项不得混入待办区
+        pending_section = packet.split("## 已完成")[0]
+        self.assertNotIn("已完成要求 06", pending_section)
+        gate = check_gate(self.paths)
+        self.assertEqual(
+            [item["requirement_id"] for item in gate["blocking"]],
+            [pending_one["id"], pending_two["id"]],
+        )
+
+    def test_recovery_packet_keeps_unsatisfied_done_visible(self) -> None:
+        done_no_evidence = add_requirement(self.paths, "完成但无证据")
+        update_requirement(self.paths, done_no_evidence["id"], status="done")
+        done_failed = add_requirement(self.paths, "完成但最新失败")
+        add_evidence(self.paths, done_failed["id"], "失败的验证", "failed")
+        update_requirement(self.paths, done_failed["id"], status="done")
+        satisfied = add_requirement(self.paths, "完全满足项")
+        add_evidence(self.paths, satisfied["id"], "通过的验证", "success")
+        update_requirement(self.paths, satisfied["id"], status="done")
+
+        packet = build_packet(self.paths)
+        pending_section = packet.split("## 已完成")[0]
+        self.assertIn("完成但无证据", pending_section)
+        self.assertIn("完成但最新失败", pending_section)
+        self.assertNotIn("完全满足项", pending_section)
+        self.assertFalse(check_gate(self.paths)["ok"])
+
+
 class LedgerQueryTests(unittest.TestCase):
     """账本查询增强（list 过滤、events 审计）：每个用例使用独立已初始化项目。"""
 

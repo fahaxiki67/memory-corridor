@@ -261,6 +261,12 @@ memory-corridor codex uninstall  # 只移除 Memory Corridor 的 Hook，第三�
 
 `cli` 只是入口，不保存另一套状态。数据真相只有 `.context-guard/state.json`；`notebook.md` 面向人读，`events.jsonl` 面向追踪。
 
+### 并发与规模边界
+
+- **单写者假设**：state.json 的写入是“读—改—原子替换”，没有跨进程文件锁。两个进程同时写同一账本会互相覆盖（实验实测：双进程各写 50 条会丢失约一半）。Codex Hook 与人工 CLI 都请保持同一时刻只有一个写者。
+- **恢复包分层**：`recovery packet` 中**未满足的 requirement 永远全量列出**（open、blocked、done 但证据不合格）；只有“done 且有当前版本 success evidence”的项折叠为最近 20 条 + 汇总，长任务账本（数百项）下恢复包体积从数万字符降一个量级。
+- **SessionStart 注入上限**：Hook 安装的 `additionalContextLimit` 为 4000 tokens。账本极大时恢复包超出部分会由 Codex 的 spill 机制落盘供模型按需读取，这是 Codex 的设计内行为。
+
 ## 设计归属
 
 记忆回廊是 fahaxiki67 个人主导、独立实现的跨 macOS / Windows 本地任务账本工具。项目代码、数据格式、CLI 和完成门禁均为本项目自有实现，运行时不依赖其他项目。

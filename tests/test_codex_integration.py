@@ -434,6 +434,16 @@ class CodexConfigTests(unittest.TestCase):
         self.assertEqual(self.hooks_path.read_text(encoding="utf-8"), "{broken")
         self.assertFalse(Path(str(self.hooks_path) + ".bak").exists())
 
+    def test_install_tolerates_utf8_bom_from_windows_editors(self) -> None:
+        self.hooks_path.parent.mkdir(parents=True)
+        self.hooks_path.write_bytes(b"\xef\xbb\xbf" + json.dumps({"hooks": {}}).encode("utf-8"))
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["--root", str(self.root), "codex", "install"]), 0)
+        config = self._load_config()
+        self.assertEqual(set(config["hooks"]), {"PreCompact", "SessionStart", "Stop"})
+        # 读回的文件本身不带 BOM
+        self.assertFalse(self.hooks_path.read_bytes().startswith(b"\xef\xbb\xbf"))
+
     def test_status_reports_configuration(self) -> None:
         status = hook_status(self.root)
         self.assertFalse(status["hooks_file_exists"])

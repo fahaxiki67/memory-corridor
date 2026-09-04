@@ -16,10 +16,24 @@ def _latest_evidence(state: dict, requirement: dict) -> dict | None:
     return matching[-1] if matching else None
 
 
-def build_packet(paths: ProjectPaths, *, max_evidence: int = 10, notebook_lines: int = 20) -> str:
+DEFAULT_MAX_DONE_REQUIREMENTS = 20
+
+
+def build_packet(
+    paths: ProjectPaths,
+    *,
+    max_evidence: int = 10,
+    notebook_lines: int = 20,
+    max_done_requirements: int = DEFAULT_MAX_DONE_REQUIREMENTS,
+) -> str:
     state = load_state(paths)
     gate = check_gate(paths)
     active = [item for item in state["requirements"] if item.get("status") != "superseded"]
+    # satisfied = done 且有当前版本 success evidence：这些项对"继续工作"价值最低，
+    # 只列最近 N 条并汇总，避免长任务账本把恢复包撑到数千行。
+    satisfied_ids = {item["requirement_id"] for item in gate.get("satisfied", [])}
+    pending = [item for item in active if item["id"] not in satisfied_ids]
+    completed = [item for item in active if item["id"] in satisfied_ids]
     lines = [
         "# 记忆回廊（Context Guard Lite 2.0）Recovery Packet",
         "",
@@ -30,9 +44,9 @@ def build_packet(paths: ProjectPaths, *, max_evidence: int = 10, notebook_lines:
         "## 当前 requirements",
         "",
     ]
-    if not active:
-        lines.append("- （暂无 active requirement）")
-    for requirement in active:
+    if not pending:
+        lines.append("- （暂无待办 requirement）")
+    for requirement in pending:
         evidence = _latest_evidence(state, requirement)
         marker = "x" if requirement.get("status") == "done" else " "
         lines.append(
@@ -43,6 +57,18 @@ def build_packet(paths: ProjectPaths, *, max_evidence: int = 10, notebook_lines:
             lines.append(f"  - 最新 evidence：{evidence['id']} [{evidence['result']}] {evidence['summary']}")
         else:
             lines.append("  - 最新 evidence：无")
+
+    if completed:
+        shown = completed[-max_done_requirements:] if max_done_requirements > 0 else []
+        lines.append("")
+        lines.append(
+            f"## 已完成（{len(completed)} 项已验证，"
+            f"列出最近 {len(shown)} 条" + (f"，另有 {len(completed) - len(shown)} 项见 state.json）" if len(completed) > len(shown) else "）")
+        )
+        for requirement in shown:
+            lines.append(
+                f"- [x] {requirement['id']} v{requirement.get('revision', 1)}: {requirement['text']}"
+            )
 
     lines.extend(["", "## 最近 evidence", ""])
     recent_evidence = state["evidence"][-max_evidence:] if max_evidence > 0 else []

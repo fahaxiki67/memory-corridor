@@ -5,6 +5,23 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.3.1] - 2026-09-05
+
+本版来自一轮实验数据复查：大规模账本（500 requirements / 1000 evidence / 500 notes）、极端文本（100KB 单条 / emoji / 控制字符）、200 条阻塞项的 Stop reason、带 BOM 的 hooks.json、双进程并发写。
+
+### 修复
+
+- **恢复包分层折叠**：`recovery packet` / SessionStart 注入包中，"done 且有当前版本 success evidence"的项只列最近 20 条并汇总（`…另有 N 项见 state.json`）；未满足项（open / blocked / 证据不合格的 done）保持全量列出。实验实测 300 完成 + 200 待办的账本，恢复包从约 60KB 降至 20KB，待办零丢失。`build_packet` 新增可选参数 `max_done_requirements`（默认 20）。
+- **hooks.json 容忍 UTF-8 BOM**：读取使用 `utf-8-sig`，Windows 记事本等编辑器加 BOM 后不再被误判为非法 JSON；写入始终无 BOM。
+
+### 文档
+
+- README 新增"并发与规模边界"：单写者假设（实验：双进程并发各写 50 条丢失约一半）、恢复包分层规则、SessionStart 注入 4000 tokens 上限与 Codex spill 行为。
+
+### 测试
+
+- 新增 3 项测试（折叠汇总与待办保全、证据不合格的 done 不折叠、BOM 容忍），总测试 58 项。
+
 ## [2.3.0] - 2026-09-05
 
 ### 新增

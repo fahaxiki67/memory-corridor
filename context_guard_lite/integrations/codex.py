@@ -326,8 +326,9 @@ def _validate_config(config: object, path: Path) -> None:
 
 
 def _read_hooks_config(path: Path) -> dict:
+    # utf-8-sig：容忍 Windows 记事本等编辑器留下的 UTF-8 BOM；写入时始终不带 BOM。
     try:
-        raw = path.read_text(encoding="utf-8")
+        raw = path.read_text(encoding="utf-8-sig")
     except OSError as exc:
         raise GuardError(f"无法读取 {path}：{exc}") from exc
     try:
