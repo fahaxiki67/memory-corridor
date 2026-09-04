@@ -1,3 +1,0 @@
-[console_scripts]
-context-guard = context_guard_lite.cli:main
-memory-corridor = context_guard_lite.cli:main

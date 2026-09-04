@@ -6,3 +6,8 @@ __pycache__/
 # Remove this line if the project intentionally versions its notebook.
 .context-guard/
 
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
