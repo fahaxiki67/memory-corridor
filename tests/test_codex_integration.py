@@ -7,12 +7,20 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
+
+
+class _FakeTTY(io.BytesIO):
+    def isatty(self) -> bool:
+        return True
 
 
 @contextlib.contextmanager
-def _stdin_as(buffer: bytes):
+def _stdin_as(buffer):
+    if isinstance(buffer, (bytes, bytearray)):
+        buffer = io.BytesIO(buffer)
     original = sys.stdin
-    sys.stdin = io.BytesIO(buffer)
+    sys.stdin = buffer
     try:
         yield
     finally:
@@ -208,6 +216,28 @@ class CodexHookHandlingTests(unittest.TestCase):
         self.assertNotIn("decision", outcome.output)
         self.assertIn("blocked", outcome.output["systemMessage"])
         self.assertIn("R001", outcome.output["systemMessage"])
+
+    # 大量阻塞项时 reason 保持精简，只列前 N 个 + 汇总提示
+    def test_stop_blocker_reason_is_capped(self) -> None:
+        init_project(self.root, "many-blockers")
+        for index in range(1, 16):
+            add_requirement(self.paths, f"未完成要求 {index:02d}")
+        outcome = handle_hook_event(_stop_payload(self.root))
+        self.assertEqual(outcome.output["decision"], "block")
+        reason = outcome.output["reason"]
+        self.assertIn("R010", reason)
+        self.assertNotIn("R011", reason)
+        self.assertIn("5 more blocked requirements not listed", reason)
+        self.assertIn("gate check", reason)
+
+    def test_stop_blocker_reason_within_cap_lists_all(self) -> None:
+        init_project(self.root, "few-blockers")
+        for index in range(1, 4):
+            add_requirement(self.paths, f"未完成要求 {index}")
+        outcome = handle_hook_event(_stop_payload(self.root))
+        reason = outcome.output["reason"]
+        self.assertIn("R003", reason)
+        self.assertNotIn("more blocked requirements", reason)
 
     # 状态损坏：不得把“无法判断”当作 pass
     def test_stop_corrupt_state_is_not_treated_as_pass(self) -> None:
@@ -459,6 +489,28 @@ class CodexConfigTests(unittest.TestCase):
     def test_load_state_guard_error_is_the_base_for_hook_conservatism(self) -> None:
         with self.assertRaises(GuardError):
             load_state(project_paths(self.root))
+
+    def test_hook_command_rejects_tty_stdin(self) -> None:
+        with _stdin_as(_FakeTTY(b"")):
+            with contextlib.redirect_stdout(io.StringIO()) as fake_out:
+                with contextlib.redirect_stderr(io.StringIO()) as fake_err:
+                    code = main(["codex", "hook"])
+        self.assertEqual(code, 1)
+        self.assertEqual(fake_out.getvalue(), "")
+        self.assertIn("stdin", fake_err.getvalue())
+
+    def test_install_warns_when_command_missing_from_path(self) -> None:
+        self.hooks_path.parent.mkdir(parents=True)
+        with mock.patch("shutil.which", return_value=None):
+            with contextlib.redirect_stdout(io.StringIO()) as fake_out:
+                self.assertEqual(main(["--root", str(self.root), "codex", "install"]), 0)
+        self.assertIn("警告", fake_out.getvalue())
+        self.assertIn("PATH", fake_out.getvalue())
+        # 命令在 PATH 上时不产生警告
+        with mock.patch("shutil.which", return_value="/usr/local/bin/memory-corridor"):
+            with contextlib.redirect_stdout(io.StringIO()) as fake_out:
+                self.assertEqual(main(["--root", str(self.root), "codex", "install"]), 0)
+        self.assertNotIn("警告", fake_out.getvalue())
 
 
 if __name__ == "__main__":

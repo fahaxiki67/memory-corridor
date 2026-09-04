@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -234,10 +235,17 @@ def _print_codex_trust_reminder() -> None:
     print("3. 确认 Memory Corridor 三个 Hook（PreCompact / SessionStart / Stop）已识别并信任。")
 
 
+def _warn_if_command_missing() -> None:
+    if shutil.which("memory-corridor") is None:
+        print("警告：当前 PATH 上找不到 memory-corridor 命令，Codex 将无法调用 Hook（触发时会报 command not found）。")
+        print("请先 pip install 本项目，或在已激活对应 venv 的终端里启动 codex。")
+
+
 def _print_codex_install(result: dict) -> int:
     if not result["written"]:
         print(f"Codex Hook 已安装，本次未做任何修改：{result['path']}")
         print(f"已存在：{', '.join(result['already'])}")
+        _warn_if_command_missing()
         _print_codex_trust_reminder()
         return 0
     print(f"已写入：{result['path']}")
@@ -247,6 +255,7 @@ def _print_codex_install(result: dict) -> int:
         print(f"- 已添加 {event}")
     if result["already"]:
         print(f"- 已存在，未重复添加：{', '.join(result['already'])}")
+    _warn_if_command_missing()
     _print_codex_trust_reminder()
     return 0
 

@@ -34,6 +34,7 @@ SESSION_START_MATCHER = "resume|compact"
 PRE_COMPACT_MATCHER = "manual|auto"
 RESUME_SOURCES = {"resume", "compact"}
 ADDITIONAL_CONTEXT_LIMIT = 4000
+MAX_BLOCKERS_IN_REASON = 10
 BACKUP_SUFFIX = ".bak"
 CODEX_DIR = ".codex"
 HOOKS_FILE_NAME = "hooks.json"
@@ -98,6 +99,13 @@ def run_hook_command(stdin: object | None = None, stdout: object | None = None, 
     stdin = sys.stdin if stdin is None else stdin
     stdout = sys.stdout if stdout is None else stdout
     stderr = sys.stderr if stderr is None else stderr
+    if hasattr(stdin, "isatty") and stdin.isatty():
+        print(
+            "memory-corridor codex hook：本命令由 Codex Hook 调用，事件 JSON 应从 stdin 管道传入；"
+            "请不要在交互终端直接运行。",
+            file=stderr,
+        )
+        return 1
     raw = getattr(stdin, "buffer", stdin).read()
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8", errors="replace")
@@ -244,13 +252,19 @@ def _handle_stop(paths: ProjectPaths, payload: dict) -> HookOutcome:
 
 def _render_blockers(gate: dict) -> str:
     lines: list[str] = []
-    for item in gate["blocking"]:
+    blocking = gate["blocking"]
+    for item in blocking[:MAX_BLOCKERS_IN_REASON]:
         if "requirement_id" in item:
             lines.append(f"{item['requirement_id']} (v{item.get('revision', 1)}):")
             lines.extend(f"- {reason}" for reason in item["reasons"])
         else:
             # 例如 no_requirements：没有 active requirement 时不能宣称完成。
             lines.append(f"- {item.get('reason')}")
+    if len(blocking) > MAX_BLOCKERS_IN_REASON:
+        lines.append(
+            f"… and {len(blocking) - MAX_BLOCKERS_IN_REASON} more blocked requirements not listed; "
+            "run `memory-corridor gate check` for the full list."
+        )
     return "\n".join(lines)
 
 

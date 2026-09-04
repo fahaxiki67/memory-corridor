@@ -5,6 +5,18 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.2.1] - 2026-09-05
+
+### 新增
+
+- `codex install` 现在会检查 `memory-corridor` 是否在 PATH 上，找不到时输出明确警告（Hook 触发会报 command not found 的最常见原因）。
+- Stop 阻塞清单加上限（前 10 个阻塞项 + 汇总提示"… and N more blocked requirements not listed"），大量 requirement 未完成时 continuation reason 仍然精简，落实"只发送 active blocker、不发全量 state"的边界。
+- `codex hook` 检测到 stdin 是交互终端（TTY）时直接拒绝并提示正确用法，避免误运行挂住等待输入。
+
+### 测试
+
+- 新增 4 项边界测试（blocker 上限截断、上限内完整列出、TTY stdin 拒绝、install 的 PATH 警告开关），总测试 49 项。
+
 ## [2.2.0] - 2026-09-04
 
 ### 新增
