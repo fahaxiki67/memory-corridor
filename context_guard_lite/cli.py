@@ -4,6 +4,7 @@ import argparse
 import json
 import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .contract import GuardError, add_note, init_project, load_state, project_paths, read_events, set_enabled
@@ -86,6 +87,7 @@ def _parser() -> argparse.ArgumentParser:
     gate_commands = gate.add_subparsers(dest="gate_command", required=True)
     gate_check = gate_commands.add_parser("check", help="检查是否允许报告完成")
     gate_check.add_argument("--json", action="store_true", dest="as_json")
+    gate_check.add_argument("--all", action="store_true", dest="show_all", help="列出全部阻塞项（默认只列前 20 条）")
 
     note = commands.add_parser("note", aliases=["notebook"], help="向旁记事本追加记录")
     note_commands = note.add_subparsers(dest="note_command", required=True)
@@ -108,7 +110,8 @@ def _parser() -> argparse.ArgumentParser:
     codex_commands = codex.add_subparsers(dest="codex_command", required=True)
     codex_commands.add_parser("hook", help="处理 Codex Hook 事件（stdin JSON 进，stdout JSON 出）")
     codex_commands.add_parser("install", help="把三个 Memory Corridor Hook 合并进 <项目>/.codex/hooks.json")
-    codex_commands.add_parser("status", help="检查 Codex Hook 安装状态")
+    codex_status = codex_commands.add_parser("status", help="检查 Codex Hook 安装状态")
+    codex_status.add_argument("--json", action="store_true", dest="as_json")
     codex_commands.add_parser("uninstall", help="只移除 Memory Corridor Hook，保留第三方 Hook")
 
     return parser
@@ -121,6 +124,11 @@ def _print_json(value: object) -> None:
 def _cmd_status(paths, as_json: bool) -> int:
     state = load_state(paths)
     gate = check_gate(paths)
+    recovery_generated_at = None
+    if paths.recovery.exists():
+        recovery_generated_at = datetime.fromtimestamp(
+            paths.recovery.stat().st_mtime, tz=timezone.utc
+        ).isoformat(timespec="seconds").replace("+00:00", "Z")
     result = {
         "project": state["project"],
         "enabled": state["contract"].get("enabled", False),
@@ -128,6 +136,7 @@ def _cmd_status(paths, as_json: bool) -> int:
         "evidence": len(state["evidence"]),
         "notes": len(state["notes"]),
         "gate": gate,
+        "recovery_generated_at": recovery_generated_at,
         "files": {
             "state": str(paths.state),
             "notebook": str(paths.notebook),
@@ -142,6 +151,10 @@ def _cmd_status(paths, as_json: bool) -> int:
         print(f"Requirements：{result['requirements']['active']} active / {result['requirements']['total']} total")
         print(f"Evidence：{result['evidence']}；笔记：{result['notes']}")
         print(f"Gate：{gate['status']} — {gate['summary']}")
+        if recovery_generated_at:
+            print(f"恢复包：已生成（{recovery_generated_at}）")
+        else:
+            print("恢复包：未生成（运行 recovery packet，或等待 PreCompact 自动刷新）")
         print(f"旁记事本：{paths.notebook}")
     return 0
 
@@ -223,13 +236,18 @@ def _cmd_gate(paths, args) -> int:
     else:
         label = {"pass": "PASS", "blocked": "BLOCKED", "disabled": "DISABLED"}[result["status"]]
         print(f"{label}：{result['summary']}")
-        for item in result["blocking"]:
+        blocking = result["blocking"]
+        shown = blocking if args.show_all else blocking[:20]
+        for item in shown:
             if "requirement_id" in item:
                 print(f"- {item['requirement_id']}：{item['text']}")
                 for reason in item["reasons"]:
                     print(f"  - {reason}")
             else:
                 print(f"- {item.get('reason')}")
+        hidden = len(blocking) - len(shown)
+        if hidden > 0:
+            print(f"… 另有 {hidden} 个阻塞项未显示（--all 查看全部；--json 供程序读取）")
     return 0 if result["ok"] else 1
 
 
@@ -350,7 +368,11 @@ def _cmd_codex(paths, args) -> int:
     if args.codex_command == "install":
         return _print_codex_install(codex_integration.install_hooks(paths.root))
     if args.codex_command == "status":
-        return _print_codex_status(codex_integration.hook_status(paths.root))
+        result = codex_integration.hook_status(paths.root)
+        if args.as_json:
+            _print_json(result)
+            return 0
+        return _print_codex_status(result)
     if args.codex_command == "uninstall":
         return _print_codex_uninstall(codex_integration.uninstall_hooks(paths.root))
     return 2

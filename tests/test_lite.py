@@ -300,6 +300,49 @@ class LedgerQueryTests(unittest.TestCase):
         with _contextlib.redirect_stderr(_io.StringIO()):
             self.assertEqual(main(["--root", str(bare), "events", "list"]), 2)
 
+    def test_gate_check_text_output_caps_and_all_flag(self) -> None:
+        for index in range(1, 26):
+            add_requirement(self.paths, f"阻塞要求 {index:02d}")
+        import io as _io
+        import contextlib as _contextlib
+
+        with _contextlib.redirect_stdout(_io.StringIO()) as capped:
+            self.assertEqual(main(["--root", str(self.root), "gate", "check"]), 1)
+        self.assertIn("阻塞要求 20", capped.getvalue())
+        self.assertNotIn("阻塞要求 21", capped.getvalue())
+        self.assertIn("另有 5 个阻塞项未显示", capped.getvalue())
+
+        with _contextlib.redirect_stdout(_io.StringIO()) as full:
+            self.assertEqual(main(["--root", str(self.root), "gate", "check", "--all"]), 1)
+        self.assertIn("阻塞要求 25", full.getvalue())
+        self.assertNotIn("未显示", full.getvalue())
+
+        # --json 保持全量供程序读取
+        with _contextlib.redirect_stdout(_io.StringIO()) as as_json:
+            self.assertEqual(main(["--root", str(self.root), "gate", "check", "--json"]), 1)
+        parsed = json.loads(as_json.getvalue())
+        self.assertEqual(len(parsed["blocking"]), 25)
+
+    def test_status_reports_recovery_packet_freshness(self) -> None:
+        import io as _io
+        import contextlib as _contextlib
+
+        with _contextlib.redirect_stdout(_io.StringIO()) as before:
+            self.assertEqual(main(["--root", str(self.root), "status"]), 0)
+        self.assertIn("未生成", before.getvalue())
+
+        from context_guard_lite.recovery import write_packet
+
+        write_packet(self.paths)
+        with _contextlib.redirect_stdout(_io.StringIO()) as after:
+            self.assertEqual(main(["--root", str(self.root), "status"]), 0)
+        self.assertIn("恢复包：已生成", after.getvalue())
+
+        with _contextlib.redirect_stdout(_io.StringIO()) as as_json:
+            self.assertEqual(main(["--root", str(self.root), "status", "--json"]), 0)
+        parsed = json.loads(as_json.getvalue())
+        self.assertTrue(parsed["recovery_generated_at"].endswith("Z"))
+
 
 if __name__ == "__main__":
     unittest.main()

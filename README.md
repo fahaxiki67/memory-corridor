@@ -161,7 +161,10 @@ context-guard events list --type requirement.add
 context-guard recovery packet
 context-guard gate check
 context-guard gate check --json
+context-guard gate check --all
 ```
+
+阻塞项很多时，文本输出默认只列前 20 条并汇总提示；`--all` 查看全部，`--json` 输出全量结构化结果供程序读取。`status` 同样支持 `--json`，并会显示恢复包是否已生成及其生成时间。
 
 `recovery packet` 会输出并保存一份短恢复包，包含 active requirements、每项当前 evidence、最近 evidence、旁记事本尾部和完成规则。它是给人或 AI 随时调取的“工作记忆”，不是完整聊天记录。
 

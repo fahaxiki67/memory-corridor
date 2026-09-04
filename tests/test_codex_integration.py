@@ -457,6 +457,21 @@ class CodexConfigTests(unittest.TestCase):
             self.assertTrue(status["events"][event]["configured"], event)
         self.assertFalse(status["events"]["Stop"]["third_party_present"])
 
+    def test_status_json_output_is_script_friendly(self) -> None:
+        import contextlib as _contextlib
+        import io as _io
+
+        self._install_via_cli()
+        with _contextlib.redirect_stdout(_io.StringIO()) as fake_out:
+            self.assertEqual(main(["--root", str(self.root), "codex", "status", "--json"]), 0)
+        parsed = json.loads(fake_out.getvalue())
+        self.assertTrue(parsed["hooks_file_exists"])
+        self.assertTrue(parsed["hooks_file_valid"])
+        self.assertEqual(parsed["trust"], "unable to determine automatically")
+        self.assertIsInstance(parsed["command_on_path"], bool)
+        for event in ("PreCompact", "SessionStart", "Stop"):
+            self.assertIn(event, parsed["events"])
+
     def test_status_detects_matcher_drift(self) -> None:
         self._install_via_cli()
         status = hook_status(self.root)

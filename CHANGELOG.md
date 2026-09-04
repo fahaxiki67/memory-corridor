@@ -5,6 +5,23 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.4.0] - 2026-09-05
+
+本版延续实验数据复查：events.jsonl 双进程并发追加（各 200 行，401/401 全部合法零丢失——追加日志比账本状态抗并发）、5000 条账本极限（gate 16ms / packet 36ms，性能无虞）、200 条阻塞项输出量化。
+
+### 新增
+
+- `gate check` 文本输出默认只列前 20 个阻塞项并汇总提示，`--all` 查看全部；`--json` 保持全量不变（实验实测 200 条阻塞时文本输出 19KB / 601 行，终端不可用）。
+- `codex status --json`：安装状态的结构化输出（hooks 文件有效性、三事件配置、PATH 检查、初始化状态、trust 提示），供脚本与工具读取。
+- `status` 新增恢复包新鲜度：显示"已生成（UTC 时间）"或"未生成"，`--json` 增加字段 `recovery_generated_at`。
+
+### 测试
+
+- 新增 4 项测试（gate 截断/--all/--json 全量、status 恢复包新鲜度、codex status --json），总测试 62 项。
+
+## [2.3.1] - 2026-09-05(https://keepachangelog.com/zh-CN/1.1.0/)，
+版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
 ## [2.3.1] - 2026-09-05
 
 本版来自一轮实验数据复查：大规模账本（500 requirements / 1000 evidence / 500 notes）、极端文本（100KB 单条 / emoji / 控制字符）、200 条阻塞项的 Stop reason、带 BOM 的 hooks.json、双进程并发写。
