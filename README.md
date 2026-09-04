@@ -266,9 +266,12 @@ memory-corridor codex uninstall  # 只移除 Memory Corridor 的 Hook，第三�
 
 ### 并发与规模边界
 
-- **单写者假设**：state.json 的写入是“读—改—原子替换”，没有跨进程文件锁。两个进程同时写同一账本会互相覆盖（实验实测：双进程各写 50 条会丢失约一半）。Codex Hook 与人工 CLI 都请保持同一时刻只有一个写者。
+以下均为实验实测数据（2026-09，M4 / Python 3.14）：
+
+- **单写者假设**：state.json 的写入是“读—改—原子替换”，没有跨进程文件锁。两个进程同时写同一账本会互相覆盖（实验实测：双进程各写 50 条会丢失约一半）。Codex Hook 与人工 CLI 都请保持同一时刻只有一个写者。`events.jsonl` 是纯追加日志，实测双进程并发各追加 200 行零丢失零损坏。
 - **恢复包分层**：`recovery packet` 中**未满足的 requirement 永远全量列出**（open、blocked、done 但证据不合格）；只有“done 且有当前版本 success evidence”的项折叠为最近 20 条 + 汇总，长任务账本（数百项）下恢复包体积从数万字符降一个量级。
 - **SessionStart 注入上限**：Hook 安装的 `additionalContextLimit` 为 4000 tokens。账本极大时恢复包超出部分会由 Codex 的 spill 机制落盘供模型按需读取，这是 Codex 的设计内行为。
+- **实测规模上限参考**：5000 条 requirements 下 `gate check` 16ms、恢复包构建 36ms；`events.jsonl` 10 万行（15.5MB）下 `events list` 全量解析 117ms；`notebook.md` 5MB 下尾读 6ms；requirement 500 次修订后 state.json 仅 110KB（history 线性增长，供审计）。日常规模远小于此。
 
 ## 设计归属
 
