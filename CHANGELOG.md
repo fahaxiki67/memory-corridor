@@ -5,6 +5,20 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.6.0] - 2026-09-05
+
+### 新增
+
+- `requirements done Rxxx`：`update --status done` 的快捷方式，标记后自动按门禁口径检查证据——缺少当前版本 success evidence 时明确警告并给出补证据命令，杜绝"标了完成却过不了门禁"的常见遗忘。不产生任何 evidence、不改变门禁语义。
+- 新增 `examples/agents-snippet.md`：给 AI 助手的指令片段（粘贴进项目 `AGENTS.md`），让 AI 在长任务中主动记录要求、真实验证后记账、遵守 Stop 门禁——配合本工具把"AI 长任务不丢要求"真正落地。
+
+### 测试
+
+- 新增 2 项测试（done 糖的无证据警告与满足提示、revision 升级后要求补新证据），总测试 67 项。
+
+## [2.5.0] - 2026-09-05(https://keepachangelog.com/zh-CN/1.1.0/)，
+版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
 ## [2.5.0] - 2026-09-05
 
 ### 新增

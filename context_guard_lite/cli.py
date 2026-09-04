@@ -13,7 +13,7 @@ from .evidence import add_evidence, list_evidence
 from .gate import check_gate
 from .integrations import codex as codex_integration
 from .recovery import build_packet, write_packet
-from .requirements import KINDS, STATUSES, add_requirement, import_requirements, update_requirement
+from .requirements import KINDS, STATUSES, add_requirement, import_requirements, mark_done, update_requirement
 
 NOTE_KINDS = {"experience", "decision", "lesson", "note"}
 
@@ -56,6 +56,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     req_import.add_argument("file", help="UTF-8 文本路径（容忍 BOM），或 - 表示 stdin")
     req_import.add_argument("--kind", choices=sorted(KINDS), default="must")
+    req_done = requirement_commands.add_parser("done", help="把 requirement 标记为 done 并检查门禁证据")
+    req_done.add_argument("requirement_id")
     req_list = requirement_commands.add_parser("list", help="列出 requirements")
     req_list.add_argument("--json", action="store_true", dest="as_json")
     req_list.add_argument("--kind", help="只列出指定类型的 requirements")
@@ -203,6 +205,18 @@ def _cmd_requirements(paths, args) -> int:
         else:
             for item in items:
                 print(f"{item['id']} [{item['status']}] [{item['kind']}] v{item['revision']}：{item['text']}")
+        return 0
+    if args.requirements_command == "done":
+        requirement, satisfied = mark_done(paths, args.requirement_id)
+        print(f"已更新 {requirement['id']}：[done] v{requirement['revision']} {requirement['text']}")
+        if satisfied:
+            print(f"{requirement['id']} 已满足完成门禁条件（当前版本最新 evidence 为 success）。")
+        else:
+            print(
+                f"警告：{requirement['id']} 没有当前版本（v{requirement['revision']}）的 success evidence，"
+                "完成门禁仍会阻塞。请先完成真实验证，然后运行："
+                f"memory-corridor evidence add --for {requirement['id']} --result success --summary \"<验证摘要>\""
+            )
         return 0
     requirement = update_requirement(
         paths,

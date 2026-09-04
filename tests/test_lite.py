@@ -344,6 +344,41 @@ class LedgerQueryTests(unittest.TestCase):
         parsed = json.loads(as_json.getvalue())
         self.assertTrue(parsed["recovery_generated_at"].endswith("Z"))
 
+    def test_requirements_done_shortcut_warns_without_evidence(self) -> None:
+        import contextlib as _contextlib
+        import io as _io
+
+        requirement = add_requirement(self.paths, "完成但忘了证据")
+        with _contextlib.redirect_stdout(_io.StringIO()) as out:
+            self.assertEqual(main(["--root", str(self.root), "requirements", "done", requirement["id"]]), 0)
+        self.assertIn("[done]", out.getvalue())
+        self.assertIn("警告", out.getvalue())
+        self.assertIn("evidence add --for R001", out.getvalue())
+        self.assertFalse(check_gate(self.paths)["ok"])
+
+        add_evidence(self.paths, requirement["id"], "补上真实验证", "success")
+        # 已是 done；再次执行 done 糖应提示满足门禁
+        with _contextlib.redirect_stdout(_io.StringIO()) as out2:
+            self.assertEqual(main(["--root", str(self.root), "requirements", "done", requirement["id"]]), 0)
+        self.assertIn("已满足完成门禁条件", out2.getvalue())
+        self.assertTrue(check_gate(self.paths)["ok"])
+
+    def test_requirements_done_after_revision_bump_requires_new_evidence(self) -> None:
+        import contextlib as _contextlib
+        import io as _io
+
+        requirement = add_requirement(self.paths, "口径 v1")
+        add_evidence(self.paths, requirement["id"], "v1 验证通过", "success")
+        with _contextlib.redirect_stdout(_io.StringIO()) as first:
+            self.assertEqual(main(["--root", str(self.root), "requirements", "done", requirement["id"]]), 0)
+        self.assertIn("已满足完成门禁条件", first.getvalue())
+
+        update_requirement(self.paths, requirement["id"], text="口径 v2（旧证据失效）")
+        with _contextlib.redirect_stdout(_io.StringIO()) as second:
+            self.assertEqual(main(["--root", str(self.root), "requirements", "done", requirement["id"]]), 0)
+        self.assertIn("警告", second.getvalue())
+        self.assertIn("v2", second.getvalue())
+
     def test_import_requirements_from_lines(self) -> None:
         from context_guard_lite.requirements import import_requirements
 

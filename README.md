@@ -188,6 +188,10 @@ context-guard gate check --all
 
 [examples/task.md](examples/task.md) 是一个完整的最小示例：为小项目补充 CSV 导出功能，从初始化账本、记录 evidence 到最后通过门禁的全过程命令。
 
+[examples/agents-snippet.md](examples/agents-snippet.md) 是给 AI 助手的指令片段：粘贴进项目的 `AGENTS.md` 后，AI 会在长任务中主动记录要求、验证并记账（配合 `requirements done` 的证据检查，AI 无法谎报完成）。
+
+`requirements done R001` 是 `update --status done` 的快捷方式，并会自动检查证据：缺少当前版本的 success evidence 时明确警告并给出补证据命令，避免"标了完成却过不了门禁"的常见遗忘。
+
 ## Codex 原生集成
 
 v2.2.0 起提供一层薄的 Codex Hook 适配（`context_guard_lite/integrations/codex.py`），在 context compact/resume 和停止阶段自动调用上面的五层能力。适配层只做协议翻译：`.context-guard/state.json` 仍是唯一业务真相，不会自动产生 evidence，不会解析 transcript，也不会替你把 requirement 改成 done。

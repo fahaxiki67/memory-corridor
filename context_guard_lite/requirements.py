@@ -86,6 +86,24 @@ def import_requirements(paths: ProjectPaths, lines, kind: str = "must") -> dict:
     return {"imported": created, "skipped": skipped}
 
 
+def mark_done(paths: ProjectPaths, requirement_id: str) -> tuple[dict, bool]:
+    """把 requirement 标记为 done，并返回 (requirement, 是否已满足门禁证据条件)。
+
+    门禁语义由 check_gate 定义，本函数只做同等判定用于提示，不产生任何 evidence。
+    """
+    requirement = update_requirement(paths, requirement_id, status="done")
+    state = load_state(paths)
+    matching = [
+        item
+        for item in state["evidence"]
+        if item.get("requirement_id", "").upper() == requirement["id"].upper()
+        and item.get("requirement_revision") == requirement.get("revision", 1)
+    ]
+    latest = matching[-1] if matching else None
+    satisfied = latest is not None and latest.get("result") == "success"
+    return requirement, satisfied
+
+
 def update_requirement(
     paths: ProjectPaths,
     requirement_id: str,
