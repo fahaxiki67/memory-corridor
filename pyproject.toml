@@ -4,10 +4,34 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "memory-corridor"
-version = "2.0.0"
+version = "2.1.0"
 description = "记忆回廊：面向长 AI 任务的本地任务账本与完成门禁"
+readme = "README.md"
 requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "fahaxiki67" }]
+keywords = ["ai", "agent", "task", "ledger", "context", "cli", "recovery"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Version Control",
+]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/fahaxiki67/memory-corridor"
+Issues = "https://github.com/fahaxiki67/memory-corridor/issues"
+Changelog = "https://github.com/fahaxiki67/memory-corridor/blob/main/CHANGELOG.md"
 
 [project.scripts]
 memory-corridor = "context_guard_lite.cli:main"

@@ -1,3 +1,31 @@
+Metadata-Version: 2.4
+Name: memory-corridor
+Version: 2.1.0
+Summary: 记忆回廊：面向长 AI 任务的本地任务账本与完成门禁
+Author: fahaxiki67
+License: MIT
+Project-URL: Homepage, https://github.com/fahaxiki67/memory-corridor
+Project-URL: Issues, https://github.com/fahaxiki67/memory-corridor/issues
+Project-URL: Changelog, https://github.com/fahaxiki67/memory-corridor/blob/main/CHANGELOG.md
+Keywords: ai,agent,task,ledger,context,cli,recovery
+Classifier: Development Status :: 4 - Beta
+Classifier: Environment :: Console
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: MacOS
+Classifier: Operating System :: Microsoft :: Windows
+Classifier: Operating System :: POSIX
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Topic :: Software Development :: Quality Assurance
+Classifier: Topic :: Software Development :: Version Control
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Dynamic: license-file
+
 # 记忆回廊（Context Guard Lite 2.0）
 
 [![CI](https://github.com/fahaxiki67/memory-corridor/actions/workflows/ci.yml/badge.svg)](https://github.com/fahaxiki67/memory-corridor/actions/workflows/ci.yml)

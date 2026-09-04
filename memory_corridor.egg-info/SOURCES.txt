@@ -1,0 +1,17 @@
+LICENSE
+README.md
+pyproject.toml
+context_guard_lite/__init__.py
+context_guard_lite/__main__.py
+context_guard_lite/cli.py
+context_guard_lite/contract.py
+context_guard_lite/evidence.py
+context_guard_lite/gate.py
+context_guard_lite/recovery.py
+context_guard_lite/requirements.py
+memory_corridor.egg-info/PKG-INFO
+memory_corridor.egg-info/SOURCES.txt
+memory_corridor.egg-info/dependency_links.txt
+memory_corridor.egg-info/entry_points.txt
+memory_corridor.egg-info/top_level.txt
+tests/test_lite.py
