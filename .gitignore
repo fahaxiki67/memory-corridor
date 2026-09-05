@@ -11,3 +11,6 @@ __pycache__/
 build/
 dist/
 *.egg-info/
+
+# 显式列出状态锁文件；.context-guard/ 已整体忽略，这里再列一次以防有人在仓库根手放同名文件。
+state.lock

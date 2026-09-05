@@ -147,9 +147,10 @@ def append_notebook(paths: ProjectPaths, title: str, lines: list[str]) -> None:
 
 
 def set_enabled(paths: ProjectPaths, enabled: bool) -> dict:
-    state = load_state(paths)
-    state["contract"]["enabled"] = enabled
-    save_state(paths, state)
+    from .locking import state_transaction
+
+    with state_transaction(paths) as state:
+        state["contract"]["enabled"] = enabled
     label = "开启" if enabled else "关闭"
     append_event(paths, "contract.on" if enabled else "contract.off", {"enabled": enabled})
     append_notebook(paths, f"保护{label}", [f"保护状态：{label}"])
@@ -160,17 +161,18 @@ def add_note(paths: ProjectPaths, text: str, kind: str = "experience", source: s
     clean_text = _one_line(text)
     if not clean_text:
         raise GuardError("笔记内容不能为空")
-    state = load_state(paths)
-    note_id = f"N{len(state['notes']) + 1:03d}"
-    note = {
-        "id": note_id,
-        "kind": kind,
-        "source": _one_line(source) or "manual",
-        "text": clean_text,
-        "created_at": utc_now(),
-    }
-    state["notes"].append(note)
-    save_state(paths, state)
+    from .locking import state_transaction
+
+    with state_transaction(paths) as state:
+        note_id = f"N{len(state['notes']) + 1:03d}"
+        note = {
+            "id": note_id,
+            "kind": kind,
+            "source": _one_line(source) or "manual",
+            "text": clean_text,
+            "created_at": utc_now(),
+        }
+        state["notes"].append(note)
     append_event(paths, "note.add", {"id": note_id, "kind": kind, "source": note["source"]})
     append_notebook(paths, f"笔记 {note_id} [{kind}]", [f"来源：{note['source']}", clean_text])
     return note

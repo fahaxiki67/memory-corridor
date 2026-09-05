@@ -76,9 +76,9 @@ def claude_hook_status(root: Path) -> dict:
 
 def handle_claude_hook_event(payload: object) -> object:
     """事件处理与 Codex 完全同源；保留独立入口以便未来平台差异分叉。"""
-    return handle_hook_event(payload)
+    return handle_hook_event(payload, platform="claude")
 
 
 def run_claude_hook_command(stdin: object | None = None, stdout: object | None = None, stderr: object | None = None) -> int:
     """``memory-corridor claude hook`` 的入口（stdin JSON → stdout JSON）。"""
-    return run_hook_command(stdin=stdin, stdout=stdout, stderr=stderr)
+    return run_hook_command(stdin=stdin, stdout=stdout, stderr=stderr, platform="claude")

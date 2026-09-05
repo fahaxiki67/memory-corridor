@@ -288,7 +288,7 @@ def _cmd_gate(paths, args) -> int:
     if args.as_json:
         _print_json(result)
     else:
-        label = {"pass": "PASS", "blocked": "BLOCKED", "disabled": "DISABLED"}[result["status"]]
+        label = {"pass": "PASS", "idle": "IDLE", "blocked": "BLOCKED", "disabled": "DISABLED"}[result["status"]]
         print(f"{label}：{result['summary']}")
         blocking = result["blocking"]
         shown = blocking if args.show_all else blocking[:20]
@@ -302,7 +302,8 @@ def _cmd_gate(paths, args) -> int:
         hidden = len(blocking) - len(shown)
         if hidden > 0:
             print(f"… 另有 {hidden} 个阻塞项未显示（--all 查看全部；--json 供程序读取）")
-    return 0 if result["ok"] else 1
+    # 退出码按状态区分：idle/disabled 是「未配置」不是「未通过」，让脚本能分辨两者。
+    return {"pass": 0, "idle": 0, "disabled": 0, "blocked": 1}[result["status"]]
 
 
 def _cmd_note(paths, args) -> int:
@@ -461,11 +462,21 @@ def _cmd_codex(paths, args) -> int:
     return 2
 
 
+# 项目核心说服力来自「不虚报」：Claude 集成尚未完成真机端到端验收，必须如实标注。
+CLAUDE_EXPERIMENTAL_NOTICE = (
+    "状态：实验性（v2.7.0 引入，尚未在真实 Claude Code 会话中完成端到端验收）。\n"
+    "协议实现基于官方文档并有集成测试覆盖，但 Stop 阻塞/恢复包注入在真机上的"
+    "实际行为仍未验证。跑通或遇到问题请开 issue，这会直接决定它何时转正式支持。"
+)
+
+
 def _cmd_claude(paths, args) -> int:
     if args.claude_command == "hook":
         return claude_integration.run_claude_hook_command()
     if args.claude_command == "install":
-        return _print_hook_install(CLAUDE_LABEL, CLAUDE_TRUST_STEPS, claude_integration.install_claude_hooks(paths.root))
+        result = _print_hook_install(CLAUDE_LABEL, CLAUDE_TRUST_STEPS, claude_integration.install_claude_hooks(paths.root))
+        print(CLAUDE_EXPERIMENTAL_NOTICE)
+        return result
     if args.claude_command == "status":
         result = claude_integration.claude_hook_status(paths.root)
         if args.as_json:

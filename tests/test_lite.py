@@ -99,12 +99,30 @@ class EdgeCaseTests(unittest.TestCase):
         self.assertEqual(main(["--root", str(self.root), "status"]), 2)
         self.assertEqual(main(["--root", str(self.root), "gate", "check"]), 2)
 
-    def test_gate_blocks_when_no_requirements(self) -> None:
+    def test_gate_idle_when_ledger_empty(self) -> None:
+        # 空账本是「信息不足」不是「验收失败」：放行（idle），让新用户不被误拦。
         init_project(self.root, "empty")
+        result = check_gate(self.paths)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "idle")
+        self.assertEqual(result["blocking"], [])
+
+    def test_gate_blocks_when_all_superseded(self) -> None:
+        # 曾经有需求、现在全部 superseded：没有可验收目标，仍然阻塞。
+        init_project(self.root, "all-superseded")
+        add_requirement(self.paths, "被取代的要求")
+        update_requirement(self.paths, "R001", status="superseded")
         result = check_gate(self.paths)
         self.assertFalse(result["ok"])
         self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["blocking"][0]["reason"], "no_requirements")
+        self.assertEqual(result["blocking"][0]["reason"], "all_superseded")
+
+    def test_gate_check_exit_code_distinguishes_idle_and_blocked(self) -> None:
+        # idle/disabled=0（未配置），blocked=1（未通过）：脚本可分辨两种失败。
+        init_project(self.root, "exit-codes")
+        self.assertEqual(main(["--root", str(self.root), "gate", "check"]), 0)
+        add_requirement(self.paths, "未完成的要求")
+        self.assertEqual(main(["--root", str(self.root), "gate", "check"]), 1)
 
     def test_off_disables_gate_but_keeps_records(self) -> None:
         init_project(self.root, "toggled")
@@ -113,7 +131,7 @@ class EdgeCaseTests(unittest.TestCase):
         state = load_state(self.paths)
         self.assertFalse(state["contract"]["enabled"])
         self.assertEqual(main(["--root", str(self.root), "on"]), 0)
-        self.assertEqual(check_gate(self.paths)["status"], "blocked")
+        self.assertEqual(check_gate(self.paths)["status"], "idle")
 
     def test_unknown_evidence_result_is_rejected(self) -> None:
         init_project(self.root, "evidence-check")

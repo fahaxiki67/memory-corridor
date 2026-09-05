@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from .contract import GuardError, ProjectPaths, append_event, append_notebook, load_state, save_state, utc_now
+import json
+
+from .contract import GuardError, ProjectPaths, append_event, append_notebook, load_state, utc_now
+from .locking import state_transaction
 
 KINDS = {"must", "avoid", "acceptance"}
 STATUSES = {"open", "blocked", "done", "superseded"}
@@ -27,43 +30,11 @@ def add_requirement(paths: ProjectPaths, text: str, kind: str = "must") -> dict:
         raise GuardError("requirement 内容不能为空")
     if kind not in KINDS:
         raise GuardError(f"不支持的 requirement 类型: {kind}，可选 {sorted(KINDS)}")
-    state = load_state(paths)
-    requirement_id = _next_id(state["requirements"], "R")
-    requirement = {
-        "id": requirement_id,
-        "kind": kind,
-        "text": clean_text,
-        "status": "open",
-        "revision": 1,
-        "history": [],
-        "created_at": utc_now(),
-        "updated_at": utc_now(),
-    }
-    state["requirements"].append(requirement)
-    save_state(paths, state)
-    append_event(paths, "requirement.add", {"id": requirement_id, "kind": kind, "revision": 1})
-    append_notebook(paths, f"新增 requirement {requirement_id}", [f"类型：{kind}", clean_text])
-    return requirement
-
-
-def import_requirements(paths: ProjectPaths, lines, kind: str = "must") -> dict:
-    """批量导入 requirements：每行一条，空行与 # 注释行跳过。
-
-    与逐条 add_requirement 的区别只在写入策略：state 只保存一次，
-    避免大批量导入时的写放大；事件与旁记事本仍逐条记录，保持审计粒度。
-    """
-    if kind not in KINDS:
-        raise GuardError(f"不支持的 requirement 类型: {kind}，可选 {sorted(KINDS)}")
-    state = load_state(paths)
-    created: list[dict] = []
-    skipped = 0
-    for raw_line in lines:
-        clean_text = _clean_text(raw_line)
-        if not clean_text or clean_text.startswith("#"):
-            skipped += 1
-            continue
+    # 锁内读改写：并发调用不会丢失更新，也不会重号（见 locking.state_transaction）。
+    with state_transaction(paths) as state:
+        requirement_id = _next_id(state["requirements"], "R")
         requirement = {
-            "id": _next_id(state["requirements"], "R"),
+            "id": requirement_id,
             "kind": kind,
             "text": clean_text,
             "status": "open",
@@ -73,18 +44,46 @@ def import_requirements(paths: ProjectPaths, lines, kind: str = "must") -> dict:
             "updated_at": utc_now(),
         }
         state["requirements"].append(requirement)
-        created.append(requirement)
-    if created:
-        save_state(paths, state)
-        for requirement in created:
-            append_event(
-                paths,
-                "requirement.add",
-                {"id": requirement["id"], "kind": kind, "revision": 1, "imported": True},
-            )
-            append_notebook(paths, f"新增 requirement {requirement['id']}", [f"类型：{kind}", requirement["text"]])
-    return {"imported": created, "skipped": skipped}
+    append_event(paths, "requirement.add", {"id": requirement_id, "kind": kind, "revision": 1})
+    append_notebook(paths, f"新增 requirement {requirement_id}", [f"类型：{kind}", clean_text])
+    return requirement
 
+def import_requirements(paths: ProjectPaths, lines, kind: str = "must") -> dict:
+    """批量导入 requirements：每行一条，空行与 # 注释行跳过。
+
+    与逐条 add_requirement 的区别只在写入策略：整批在同一把锁内完成，
+    state 只保存一次，避免大批量导入时的写放大；事件与旁记事本仍逐条记录。
+    """
+    if kind not in KINDS:
+        raise GuardError(f"不支持的 requirement 类型: {kind}，可选 {sorted(KINDS)}")
+    created: list[dict] = []
+    skipped = 0
+    with state_transaction(paths) as state:
+        for raw_line in lines:
+            clean_text = _clean_text(raw_line)
+            if not clean_text or clean_text.startswith("#"):
+                skipped += 1
+                continue
+            requirement = {
+                "id": _next_id(state["requirements"], "R"),
+                "kind": kind,
+                "text": clean_text,
+                "status": "open",
+                "revision": 1,
+                "history": [],
+                "created_at": utc_now(),
+                "updated_at": utc_now(),
+            }
+            state["requirements"].append(requirement)
+            created.append(requirement)
+    for requirement in created:
+        append_event(
+            paths,
+            "requirement.add",
+            {"id": requirement["id"], "kind": kind, "revision": 1, "imported": True},
+        )
+        append_notebook(paths, f"新增 requirement {requirement['id']}", [f"类型：{kind}", requirement["text"]])
+    return {"imported": created, "skipped": skipped}
 
 def mark_done(paths: ProjectPaths, requirement_id: str) -> tuple[dict, bool]:
     """把 requirement 标记为 done，并返回 (requirement, 是否已满足门禁证据条件)。
@@ -103,7 +102,6 @@ def mark_done(paths: ProjectPaths, requirement_id: str) -> tuple[dict, bool]:
     satisfied = latest is not None and latest.get("result") == "success"
     return requirement, satisfied
 
-
 def update_requirement(
     paths: ProjectPaths,
     requirement_id: str,
@@ -113,7 +111,19 @@ def update_requirement(
     status: str | None = None,
     reason: str | None = None,
 ) -> dict:
-    state = load_state(paths)
+    changed: list[bool] = []
+    with state_transaction(paths) as state:
+        requirement, revision_changed = _apply_requirement_update(
+            state, requirement_id, text=text, kind=kind, status=status
+        )
+        changed.append(revision_changed)
+        requirement = json.loads(json.dumps(requirement))  # 快照，避免调用方改到锁外状态
+    revision_changed = changed[0]
+    _log_requirement_update(paths, requirement, revision_changed, reason)
+    return requirement
+
+
+def _apply_requirement_update(state: dict, requirement_id: str, *, text, kind, status) -> tuple[dict, bool]:
     requirement = get_requirement(state, requirement_id)
     if text is None and kind is None and status is None:
         raise GuardError("至少提供 --text、--kind 或 --status 之一")
@@ -147,7 +157,10 @@ def update_requirement(
     if status is not None:
         requirement["status"] = status
     requirement["updated_at"] = utc_now()
-    save_state(paths, state)
+    return requirement, revision_changed
+
+
+def _log_requirement_update(paths: ProjectPaths, requirement: dict, revision_changed: bool, reason: str | None) -> None:
     append_event(
         paths,
         "requirement.update",
@@ -164,5 +177,3 @@ def update_requirement(
     if reason:
         details.append(f"原因：{_clean_text(reason)}")
     append_notebook(paths, f"更新 requirement {requirement['id']}", details + [requirement["text"]])
-    return requirement
-

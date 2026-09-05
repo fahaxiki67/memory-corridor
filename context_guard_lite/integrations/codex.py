@@ -15,12 +15,13 @@ recovery / gate / contract API 之间的翻译：
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..contract import GuardError, ProjectPaths, project_paths
+from ..contract import GuardError, ProjectPaths, append_event, project_paths
 from ..gate import check_gate
 from ..recovery import build_packet, write_packet
 
@@ -64,7 +65,7 @@ class HookOutcome:
 # ---------------------------------------------------------------------------
 
 
-def handle_hook_event(payload: object) -> HookOutcome:
+def handle_hook_event(payload: object, platform: str = "codex") -> HookOutcome:
     if not isinstance(payload, dict):
         raise HookProtocolError("stdin 顶层必须是 JSON 对象")
     event = payload.get("hook_event_name")
@@ -74,20 +75,29 @@ def handle_hook_event(payload: object) -> HookOutcome:
     cwd = cwd_value if isinstance(cwd_value, str) and cwd_value.strip() else None
     paths = project_paths(cwd)
     if event == "PreCompact":
-        return _handle_pre_compact(paths)
-    if event == "SessionStart":
-        return _handle_session_start(paths, payload)
-    if event == "Stop":
-        return _handle_stop(paths, payload)
-    raise HookProtocolError(
-        f"不支持的 hook_event_name: {event}；支持：{', '.join(SUPPORTED_EVENTS)}"
-    )
+        outcome = _handle_pre_compact(paths, platform)
+    elif event == "SessionStart":
+        outcome = _handle_session_start(paths, payload, platform)
+    elif event == "Stop":
+        outcome = _handle_stop(paths, payload, platform)
+    else:
+        raise HookProtocolError(
+            f"不支持的 hook_event_name: {event}；支持：{', '.join(SUPPORTED_EVENTS)}"
+        )
+    return outcome
 
 
-def run_hook_command(stdin: object | None = None, stdout: object | None = None, stderr: object | None = None) -> int:
+def run_hook_command(
+    stdin: object | None = None,
+    stdout: object | None = None,
+    stderr: object | None = None,
+    platform: str = "codex",
+) -> int:
     """``memory-corridor codex hook`` 的入口：stdin JSON → stdout JSON。
 
     stdout 只允许出现合法 Hook 输出；所有诊断走 stderr。
+    platform 只用于事件审计（hook.* 事件里的 platform 字段），
+    Claude 集成经 ``run_claude_hook_command`` 传入 "claude"。
     """
     stdin = sys.stdin if stdin is None else stdin
     stdout = sys.stdout if stdout is None else stdout
@@ -108,7 +118,7 @@ def run_hook_command(stdin: object | None = None, stdout: object | None = None, 
         print(f"memory-corridor codex hook：stdin 不是合法 JSON：{exc}", file=stderr)
         return 1
     try:
-        outcome = handle_hook_event(payload)
+        outcome = handle_hook_event(payload, platform=platform)
     except HookProtocolError as exc:
         print(f"memory-corridor codex hook：{exc}", file=stderr)
         return 1
@@ -119,7 +129,20 @@ def run_hook_command(stdin: object | None = None, stdout: object | None = None, 
     return outcome.exit_code
 
 
-def _handle_pre_compact(paths: ProjectPaths) -> HookOutcome:
+def _record_hook_event(paths: ProjectPaths, event_type: str, details: dict) -> None:
+    """把 hook 触发记录进 events.jsonl，让门禁链路可观测、可验证。
+
+    只在已初始化的项目记录（state.json 存在）；未初始化保持 no-op 承诺，
+    不因 hook 触发而在无关目录落任何文件。审计写入是 best-effort：
+    记事件失败绝不能反过来破坏门禁决策，故吞掉 OSError。
+    """
+    if not paths.state.exists():
+        return
+    with contextlib.suppress(OSError):
+        append_event(paths, event_type, details)
+
+
+def _handle_pre_compact(paths: ProjectPaths, platform: str = "codex") -> HookOutcome:
     if not paths.state.exists():
         return HookOutcome(
             output={"continue": True},
@@ -129,6 +152,7 @@ def _handle_pre_compact(paths: ProjectPaths) -> HookOutcome:
         packet = build_packet(paths)
         target = write_packet(paths, content=packet)
     except (GuardError, OSError) as exc:
+        _record_hook_event(paths, "hook.pre_compact", {"platform": platform, "result": "failed"})
         return HookOutcome(
             output={
                 "continue": True,
@@ -136,6 +160,9 @@ def _handle_pre_compact(paths: ProjectPaths) -> HookOutcome:
             },
             diagnostics=(f"Memory Corridor: 恢复包刷新失败：{exc}",),
         )
+    _record_hook_event(
+        paths, "hook.pre_compact", {"platform": platform, "result": "refreshed"}
+    )
     return HookOutcome(
         output={
             "continue": True,
@@ -144,7 +171,7 @@ def _handle_pre_compact(paths: ProjectPaths) -> HookOutcome:
     )
 
 
-def _handle_session_start(paths: ProjectPaths, payload: dict) -> HookOutcome:
+def _handle_session_start(paths: ProjectPaths, payload: dict, platform: str = "codex") -> HookOutcome:
     source = payload.get("source")
     if not paths.state.exists():
         return HookOutcome(
@@ -153,6 +180,9 @@ def _handle_session_start(paths: ProjectPaths, payload: dict) -> HookOutcome:
         )
     # startup/clear 用户可能就是想清空上下文，不注入旧工作状态。
     if source not in RESUME_SOURCES:
+        _record_hook_event(
+            paths, "hook.session_start", {"platform": platform, "source": source, "result": "skipped"}
+        )
         return HookOutcome(
             output={"continue": True},
             diagnostics=(f"Memory Corridor: SessionStart source={source!r}，不注入恢复包。",),
@@ -161,6 +191,9 @@ def _handle_session_start(paths: ProjectPaths, payload: dict) -> HookOutcome:
         packet = build_packet(paths)
     except (GuardError, OSError) as exc:
         # 恢复失败时不得伪造恢复包。
+        _record_hook_event(
+            paths, "hook.session_start", {"platform": platform, "source": source, "result": "failed"}
+        )
         return HookOutcome(
             output={
                 "continue": True,
@@ -168,6 +201,9 @@ def _handle_session_start(paths: ProjectPaths, payload: dict) -> HookOutcome:
             },
             diagnostics=(f"Memory Corridor: 恢复包构建失败：{exc}",),
         )
+    _record_hook_event(
+        paths, "hook.session_start", {"platform": platform, "source": source, "result": "injected"}
+    )
     return HookOutcome(
         output={
             "continue": True,
@@ -179,43 +215,25 @@ def _handle_session_start(paths: ProjectPaths, payload: dict) -> HookOutcome:
     )
 
 
-def _handle_stop(paths: ProjectPaths, payload: dict) -> HookOutcome:
-    stop_hook_active = bool(payload.get("stop_hook_active", False))
-    if not paths.state.exists():
-        return HookOutcome(
-            output={"continue": True},
-            diagnostics=(f"Memory Corridor: {paths.root} 未初始化，Stop 门禁不生效。",),
-        )
-    try:
-        gate = check_gate(paths)
-    except (GuardError, OSError) as exc:
-        # 无法判断不得伪装为业务 PASS；首次遇到时阻塞一次并给出可执行指引，
-        # stop_hook_active 为真时不再续命，避免无限 continuation loop。
-        if stop_hook_active:
-            return HookOutcome(
-                output={
-                    "continue": True,
-                    "systemMessage": f"Memory Corridor: gate state unreadable, gate not enforced ({exc}).",
-                },
-                diagnostics=(f"Memory Corridor: 状态无法读取：{exc}",),
-            )
-        return HookOutcome(
-            output={
-                "decision": "block",
-                "reason": (
-                    "Memory Corridor completion gate could not be read; "
-                    "an unreadable state is not treated as a pass.\n\n"
-                    f"{exc}\n\n"
-                    "Inspect .context-guard/state.json, fix or set the guard off, "
-                    "then run memory-corridor status."
-                ),
-            },
-            diagnostics=(f"Memory Corridor: 状态无法读取：{exc}",),
-        )
+def _stop_outcome_for_gate(gate: dict, stop_hook_active: bool) -> HookOutcome:
+    """按门禁结果决定 Stop 输出；纯函数，事件记录由 _handle_stop 负责。"""
     if gate["status"] == "disabled":
         return HookOutcome(
             output={"continue": True},
             diagnostics=("Memory Corridor: 保护已关闭，完成门禁不生效。",),
+        )
+    if gate["status"] == "idle":
+        # 空账本不再阻塞：放行并附引导，把最糟的第一印象变成 onboarding。
+        return HookOutcome(
+            output={
+                "continue": True,
+                "systemMessage": (
+                    "Memory Corridor is installed but the ledger is empty. "
+                    "Record what this task must achieve with "
+                    '`memory-corridor requirements add "<requirement>"` '
+                    "to enable the completion gate."
+                ),
+            }
         )
     if gate["ok"]:
         return HookOutcome(output={"continue": True})
@@ -241,6 +259,65 @@ def _handle_stop(paths: ProjectPaths, payload: dict) -> HookOutcome:
             ),
         }
     )
+
+
+def _handle_stop(paths: ProjectPaths, payload: dict, platform: str = "codex") -> HookOutcome:
+    stop_hook_active = bool(payload.get("stop_hook_active", False))
+    if not paths.state.exists():
+        return HookOutcome(
+            output={"continue": True},
+            diagnostics=(f"Memory Corridor: {paths.root} 未初始化，Stop 门禁不生效。",),
+        )
+    try:
+        gate = check_gate(paths)
+    except (GuardError, OSError) as exc:
+        # 无法判断不得伪装为业务 PASS；首次遇到时阻塞一次并给出可执行指引，
+        # stop_hook_active 为真时不再续命，避免无限 continuation loop。
+        _record_hook_event(
+            paths,
+            "hook.stop",
+            {
+                "platform": platform,
+                "decision": "block" if not stop_hook_active else "allow",
+                "gate_status": "unreadable",
+                "blocking_count": 0,
+                "stop_hook_active": stop_hook_active,
+            },
+        )
+        if stop_hook_active:
+            return HookOutcome(
+                output={
+                    "continue": True,
+                    "systemMessage": f"Memory Corridor: gate state unreadable, gate not enforced ({exc}).",
+                },
+                diagnostics=(f"Memory Corridor: 状态无法读取：{exc}",),
+            )
+        return HookOutcome(
+            output={
+                "decision": "block",
+                "reason": (
+                    "Memory Corridor completion gate could not be read; "
+                    "an unreadable state is not treated as a pass.\n\n"
+                    f"{exc}\n\n"
+                    "Inspect .context-guard/state.json, fix or set the guard off, "
+                    "then run memory-corridor status."
+                ),
+            },
+            diagnostics=(f"Memory Corridor: 状态无法读取：{exc}",),
+        )
+    outcome = _stop_outcome_for_gate(gate, stop_hook_active)
+    _record_hook_event(
+        paths,
+        "hook.stop",
+        {
+            "platform": platform,
+            "decision": "block" if outcome.output.get("decision") == "block" else "allow",
+            "gate_status": gate["status"],
+            "blocking_count": len(gate["blocking"]),
+            "stop_hook_active": stop_hook_active,
+        },
+    )
+    return outcome
 
 
 def _render_blockers(gate: dict) -> str:

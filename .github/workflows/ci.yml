@@ -28,6 +28,12 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.11", "3.12", "3.13", "3.14"]
+        # 并发回归要起 20~30 个子进程，只在最快的一格全量跑，其余格跳过
+        # （测试侧按 MC_SKIP_CONCURRENCY=1 跳过，见 tests/test_concurrency.py）。
+        include:
+          - os: ubuntu-latest
+            python-version: "3.12"
+            run_concurrency: true
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -38,6 +44,8 @@ jobs:
 
       - name: Run tests
         run: python -m unittest discover -s tests -p "test_*.py" -v
+        env:
+          MC_SKIP_CONCURRENCY: ${{ matrix.run_concurrency != true && '1' || '' }}
 
       - name: Validate packaging and CLI entry points
         run: |

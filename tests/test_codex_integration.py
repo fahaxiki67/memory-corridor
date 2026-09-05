@@ -10,8 +10,9 @@ from pathlib import Path
 from unittest import mock
 
 from context_guard_lite.cli import main
-from context_guard_lite.contract import GuardError, init_project, load_state, project_paths
+from context_guard_lite.contract import GuardError, init_project, load_state, project_paths, read_events
 from context_guard_lite.evidence import add_evidence
+from context_guard_lite.integrations.claude import handle_claude_hook_event
 from context_guard_lite.integrations.codex import (
     ADDITIONAL_CONTEXT_LIMIT,
     HOOK_COMMAND,
@@ -503,6 +504,8 @@ class CodexConfigTests(unittest.TestCase):
             self.assertTrue(outcome.output["continue"])
             paths = project_paths(spaced)
             self.assertTrue(paths.recovery.exists())
+            # 空账本自 v2.8.0 起为 idle 放行；补一条未完成 requirement 让 Stop 处于应阻塞状态。
+            add_requirement(paths, "未完成的要求")
             stop = handle_hook_event(_stop_payload(spaced))
             self.assertEqual(stop.output["decision"], "block")
             config = json.loads(hooks_config_path(spaced).read_text(encoding="utf-8"))
@@ -557,6 +560,96 @@ class CodexConfigTests(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()) as fake_out:
                 self.assertEqual(main(["--root", str(self.root), "codex", "install"]), 0)
         self.assertNotIn("警告", fake_out.getvalue())
+
+
+class StopIdleAndObservabilityTests(unittest.TestCase):
+    """v2.8.0：空账本 idle 放行引导 + hook 触发事件可观测（hook.* 事件）。"""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.paths = project_paths(self.root)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _stop_events(self) -> list[dict]:
+        return read_events(self.paths, event_type="hook.stop")
+
+    # 空账本：Stop 不再阻塞，放行并附引导文案
+    def test_stop_idle_continues_with_onboarding_hint(self) -> None:
+        init_project(self.root, "idle-demo")
+        outcome = handle_hook_event(_stop_payload(self.root))
+        self.assertTrue(outcome.output["continue"])
+        self.assertNotIn("decision", outcome.output)
+        self.assertIn("requirements add", outcome.output["systemMessage"])
+        self.assertIn("ledger is empty", outcome.output["systemMessage"])
+
+    # Stop 触发写 hook.stop 事件，decision/gate_status/blocking_count 可查
+    def test_stop_blocked_records_hook_stop_event(self) -> None:
+        init_project(self.root, "observe-block")
+        add_requirement(self.paths, "未完成的要求")
+        handle_hook_event(_stop_payload(self.root))
+        events = self._stop_events()
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["platform"], "codex")
+        self.assertEqual(event["decision"], "block")
+        self.assertEqual(event["gate_status"], "blocked")
+        self.assertEqual(event["blocking_count"], 1)
+        self.assertFalse(event["stop_hook_active"])
+
+    # 防循环放行也如实记录 stop_hook_active=true
+    def test_stop_hook_active_records_flag(self) -> None:
+        init_project(self.root, "observe-loop")
+        add_requirement(self.paths, "未完成的要求")
+        handle_hook_event(_stop_payload(self.root, stop_hook_active=True))
+        event = self._stop_events()[0]
+        self.assertEqual(event["decision"], "allow")
+        self.assertTrue(event["stop_hook_active"])
+
+    # 空账本 idle 放行也留痕（gate_status=idle）
+    def test_stop_idle_records_idle_status(self) -> None:
+        init_project(self.root, "observe-idle")
+        handle_hook_event(_stop_payload(self.root))
+        event = self._stop_events()[0]
+        self.assertEqual(event["decision"], "allow")
+        self.assertEqual(event["gate_status"], "idle")
+        self.assertEqual(event["blocking_count"], 0)
+
+    # Claude 平台经独立入口触发，事件 platform 如实记为 claude
+    def test_claude_platform_recorded(self) -> None:
+        init_project(self.root, "observe-claude")
+        add_requirement(self.paths, "未完成的要求")
+        handle_claude_hook_event(_stop_payload(self.root))
+        event = self._stop_events()[0]
+        self.assertEqual(event["platform"], "claude")
+        self.assertEqual(event["decision"], "block")
+
+    # 未初始化项目保持 no-op 承诺：不落任何文件
+    def test_uninitialized_stop_records_nothing(self) -> None:
+        outcome = handle_hook_event(_stop_payload(self.root))
+        self.assertTrue(outcome.output["continue"])
+        self.assertFalse((self.root / ".context-guard").exists())
+
+    # PreCompact / SessionStart 触发同样留痕
+    def test_pre_compact_records_event(self) -> None:
+        init_project(self.root, "observe-compact")
+        add_requirement(self.paths, "压缩前应保留的要求")
+        handle_hook_event(_pre_compact_payload(self.root))
+        events = read_events(self.paths, event_type="hook.pre_compact")
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["platform"], "codex")
+        self.assertEqual(events[0]["result"], "refreshed")
+
+    def test_session_start_records_inject_and_skip(self) -> None:
+        init_project(self.root, "observe-session")
+        add_requirement(self.paths, "恢复包应包含的要求")
+        handle_hook_event(_session_start_payload(self.root, "startup"))
+        handle_hook_event(_session_start_payload(self.root, "resume"))
+        events = read_events(self.paths, event_type="hook.session_start")
+        self.assertEqual([event["result"] for event in events], ["skipped", "injected"])
+        self.assertEqual([event["source"] for event in events], ["startup", "resume"])
 
 
 if __name__ == "__main__":

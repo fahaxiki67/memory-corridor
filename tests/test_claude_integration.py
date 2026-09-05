@@ -178,8 +178,11 @@ class ClaudeHookHandlingTests(unittest.TestCase):
                     self.assertEqual(main(["claude", "hook"]), 0)
         finally:
             sys.stdin = original_stdin
+        # 空账本自 v2.8.0 起为 idle 放行：输出仍是合法 Hook JSON，且带引导文案。
         parsed = json.loads(fake_out.getvalue())
-        self.assertEqual(parsed["decision"], "block")
+        self.assertTrue(parsed["continue"])
+        self.assertNotIn("decision", parsed)
+        self.assertIn("requirements add", parsed["systemMessage"])
 
     def test_uninitialized_stop_is_noop(self) -> None:
         outcome = handle_claude_hook_event(_stop_payload(self.root))

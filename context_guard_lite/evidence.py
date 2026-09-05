@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from .contract import GuardError, ProjectPaths, append_event, append_notebook, load_state, save_state, utc_now
+from .contract import GuardError, ProjectPaths, append_event, append_notebook, load_state, utc_now
+from .locking import state_transaction
 from .requirements import get_requirement
 
 RESULTS = {"success", "failed", "unknown"}
@@ -27,21 +28,21 @@ def add_evidence(
         raise GuardError("evidence summary 不能为空")
     if result not in RESULTS:
         raise GuardError(f"不支持的 evidence 结果: {result}，可选 {sorted(RESULTS)}")
-    state = load_state(paths)
-    requirement = get_requirement(state, requirement_id)
-    evidence_id = f"E{len(state['evidence']) + 1:03d}"
-    evidence = {
-        "id": evidence_id,
-        "requirement_id": requirement["id"],
-        "requirement_revision": requirement["revision"],
-        "result": result,
-        "summary": clean_summary,
-        "target": _clean(target),
-        "command": _clean(command),
-        "created_at": utc_now(),
-    }
-    state["evidence"].append(evidence)
-    save_state(paths, state)
+    with state_transaction(paths) as state:
+        requirement = get_requirement(state, requirement_id)
+        evidence_id = f"E{len(state['evidence']) + 1:03d}"
+        evidence = {
+            "id": evidence_id,
+            "requirement_id": requirement["id"],
+            "requirement_revision": requirement["revision"],
+            "result": result,
+            "summary": clean_summary,
+            "target": _clean(target),
+            "command": _clean(command),
+            "created_at": utc_now(),
+        }
+        state["evidence"].append(evidence)
+        requirement = dict(requirement)
     append_event(
         paths,
         "evidence.add",

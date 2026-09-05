@@ -5,6 +5,28 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.8.0] - 2026-09-05
+
+### 修复（重要：建议所有用户升级）
+
+- **并发写丢失更新（P0）**：v2.7.0 及更早版本中，state.json 的写入是"读—改—原子替换"，没有跨进程文件锁；hook、终端、脚本同时写同一账本会互相覆盖（实测 30 个并发 `requirements add` 只剩 25~28 条，且 ID 会重号、后写覆盖前写）。v2.8.0 新增 `locking.py`：跨平台文件锁（POSIX `fcntl` / Windows `msvcrt`，零依赖，10 秒超时抛错不挂死 hook）+ 锁内读改写事务 `state_transaction`，全部六个 state 写路径（requirements add / import / update（含 done）、evidence add、note add、contract on/off）改造为事务。实测 30 并发 add 零丢失零重号。
+
+### 新增
+
+- **完成门禁 idle 状态**：空账本不再阻塞。此前新用户 init + hook install 后每一回合都被 `no_requirements` 阻塞；现在空账本返回 `status: idle`，Stop hook 放行并附一句"如何记录第一条 requirement"的引导。曾经有需求、后来全部 superseded 时仍阻塞（`all_superseded`）。
+- **hook 触发事件可观测**：已初始化项目里每次 hook 触发都在 events.jsonl 追加 `hook.stop` / `hook.pre_compact` / `hook.session_start`（含 platform、decision、gate_status、blocking_count、stop_hook_active），`memory-corridor events list --type hook.stop` 可直接验证门禁是否真的在工作。未初始化项目仍保持 no-op 不落文件；审计写入失败不影响门禁决策。
+- **`gate check` 退出码按状态区分**：pass / idle / disabled → 0，blocked → 1，脚本可分辨"未配置"与"未通过"。
+
+### 变更
+
+- README 的 Claude Code 章节与 `claude install` 输出明确标注**实验性**：协议实现基于官方文档并有集成测试覆盖，但尚未在真实 Claude Code 会话中完成端到端验收。
+- README"并发与规模边界"章节更新：单写者假设自本版本起不再成立（写入已加跨进程锁），历史实测数据保留存档。
+- CI：并发回归测试只在 ubuntu-latest × Python 3.12 全量运行，其余 11 格以 `MC_SKIP_CONCURRENCY=1` 跳过，避免慢速 runner 拖垮矩阵。
+
+### 测试
+
+- 新增并发回归 2 项（20 并发 add 零丢失零重号；req / evidence / note 混合并发写全量保真）；idle 门禁与退出码 3 项；hook 事件可观测 8 项；总测试 89 项。
+
 ## [2.7.0] - 2026-09-05
 
 ### 新增
