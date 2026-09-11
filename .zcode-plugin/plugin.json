@@ -1,0 +1,10 @@
+{
+  "name": "memory-corridor",
+  "version": "2.9.0",
+  "description": "记忆回廊：SessionStart 注入最新工作状态恢复包，Stop 强制完成门禁。.context-guard/state.json 是唯一业务状态来源。",
+  "author": {
+    "name": "fahaxiki67"
+  },
+  "license": "MIT",
+  "hooks": "hooks"
+}

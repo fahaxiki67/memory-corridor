@@ -1,0 +1,10 @@
+{
+  "name": "memory-corridor-local",
+  "plugins": [
+    {
+      "name": "memory-corridor",
+      "source": "./",
+      "description": "记忆回廊：ZCode SessionStart 恢复包注入 + Stop 完成门禁"
+    }
+  ]
+}

@@ -13,6 +13,7 @@ from .evidence import add_evidence, list_evidence
 from .gate import check_gate
 from .integrations import claude as claude_integration
 from .integrations import codex as codex_integration
+from .integrations import zcode as zcode_integration
 from .recovery import build_packet, write_packet
 from .requirements import KINDS, STATUSES, add_requirement, import_requirements, mark_done, update_requirement
 
@@ -130,6 +131,12 @@ def _parser() -> argparse.ArgumentParser:
     claude_status = claude_commands.add_parser("status", help="检查 Claude Hook 安装状态")
     claude_status.add_argument("--json", action="store_true", dest="as_json")
     claude_commands.add_parser("uninstall", help="只移除 Memory Corridor Hook，保留用户配置")
+
+    zcode = commands.add_parser("zcode", help="ZCode 原生 Plugin Hook 集成")
+    zcode_commands = zcode.add_subparsers(dest="zcode_command", required=True)
+    zcode_commands.add_parser("hook", help="处理 ZCode Hook 事件（stdin JSON 进，stdout JSON 出）")
+    zcode_status = zcode_commands.add_parser("status", help="检查 ZCode Plugin/Hook 安装与协议状态")
+    zcode_status.add_argument("--json", action="store_true", dest="as_json")
 
     return parser
 
@@ -492,6 +499,74 @@ def _cmd_claude(paths, args) -> int:
     return 2
 
 
+ZCODE_EXPERIMENTAL_NOTICE = (
+    "状态：实验性（v2.9.0 引入）。协议事实以 ZCode 官方文档与客户端实现核对，\n"
+    "协议级测试已覆盖，但尚未在真实 ZCode 会话中完成端到端验收\n"
+    "（SessionStart 注入、Stop 阻塞的实际行为待真机确认）。\n"
+    "ZCode 的 Hook 由 Plugin 分发：不写项目配置文件，也没有 install/uninstall 命令；\n"
+    "安装/卸载通过 ZCode 客户端的 Settings → Plugin Management 完成。"
+)
+
+
+def _print_zcode_status(result: dict) -> int:
+    files = result["plugin_files"]
+    installed = result["installed"]
+    protocol = result["protocol"]
+    print("ZCode Plugin 分发文件（memory-corridor 仓库内）：")
+    if files["manifest_exists"]:
+        validity = "可解析" if files["manifest_valid"] else f"无效：{files['manifest_error']}"
+        print(f"- manifest：{files['manifest_path']}（{validity}）")
+    else:
+        print(f"- manifest：不存在（{files['manifest_path']}；插件文件在 memory-corridor 仓库，不在使用它的项目里）")
+    if files["hooks_file_exists"]:
+        validity = "可解析" if files["hooks_file_valid"] else f"无效：{files['hooks_file_error']}"
+        print(f"- hooks.json：{files['hooks_file_path']}（{validity}）")
+        for event, entry in files["events"].items():
+            if not entry["configured"]:
+                print(f"  - {event}：未配置本插件的 handler")
+                continue
+            matcher = f"，matcher={entry['matcher']}" if entry["matcher"] else "（无 matcher）"
+            suffix = ""
+            if entry.get("matcher_expected") is not None and entry["matcher"] != entry["matcher_expected"]:
+                suffix = f"【警告：matcher 已偏离安装值，预期 {entry['matcher_expected']}】"
+            print(f"  - {event}：已配置{matcher}{suffix}")
+    else:
+        print(f"- hooks.json：不存在（{files['hooks_file_path']}）")
+    wrapper = "存在" if files["wrapper_exists"] else "缺失"
+    print(f"- hook wrapper：{files['wrapper_path']}（{wrapper}）")
+    print("ZCode 插件缓存：")
+    if installed["installed"]:
+        for copy in installed["copies"]:
+            hooks = "含 hooks.json" if copy["hooks_file_exists"] else "缺 hooks.json"
+            print(f"- 已安装：{copy['path']}（v{copy.get('version')}，{hooks}）")
+    else:
+        print(f"- 缓存中未发现 memory-corridor 插件（{installed['cache_root']}）")
+    print("运行条件：")
+    print(f"- python3：{'PATH 上可用' if result['python3_on_path'] else 'PATH 上找不到（hook 将无法启动；Windows 需自行提供 python3 别名）'}")
+    print(f"- memory-corridor 命令：{'PATH 上可用（可选）' if result['memory_corridor_on_path'] else '不在 PATH（可选；wrapper 无需安装即可运行）'}")
+    print(f"当前项目：{'已初始化' if result['project_initialized'] else '未初始化（hook 按约定 no-op）'}", end="")
+    if result["protection_enabled"] is not None:
+        print(f"；保护：{'开启' if result['protection_enabled'] else '关闭'}")
+    else:
+        print("；保护：无法读取")
+    print(f"协议：事件 {', '.join(protocol['supported_events'])}；SessionStart matcher={protocol['session_start_matcher']}；"
+          f"Stop 续命平台上限 {protocol['stop_continuation_limit']} 次（本适配每回合最多 1 次）；无 PreCompact 事件")
+    print(ZCODE_EXPERIMENTAL_NOTICE)
+    return 0
+
+
+def _cmd_zcode(paths, args) -> int:
+    if args.zcode_command == "hook":
+        return zcode_integration.run_zcode_hook_command()
+    if args.zcode_command == "status":
+        result = zcode_integration.zcode_hook_status(paths.root)
+        if args.as_json:
+            _print_json(result)
+            return 0
+        return _print_zcode_status(result)
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     _configure_output()
     parser = _parser()
@@ -529,6 +604,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_codex(paths, args)
         if args.top_command == "claude":
             return _cmd_claude(paths, args)
+        if args.top_command == "zcode":
+            return _cmd_zcode(paths, args)
         parser.error(f"未知命令: {args.top_command}")
     except (GuardError, OSError, ValueError) as exc:
         print(f"错误：{exc}", file=sys.stderr)

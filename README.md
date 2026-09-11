@@ -284,6 +284,54 @@ memory-corridor claude hook        # Hook 统一入口（与 codex hook 同一�
 - PreCompact 的 `systemMessage` 会被 Claude Code 丢弃（恢复包落盘副作用不受影响）；handler 保持 `type/command/timeout` 最小字段集合；
 - Stop 连续阻塞 8 次后 Claude Code 会强制结束回合（平台内置兜底）；我们的 `stop_hook_active` 防循环在其之前就已生效。
 
+## ZCode 原生集成（Plugin）
+
+> **集成状态：实验性（v2.9.0 引入）。协议级测试通过，真实 ZCode E2E 待人工验证。**
+> 协议事实以 ZCode 官方文档与客户端实现核对（2026-09-11），集成测试覆盖协议契约与业务边界，
+> 但 SessionStart 注入与 Stop 阻塞尚未在真实 ZCode 会话中验证。跑通或遇到问题请开 issue。
+
+ZCode 的 hook 只能通过 Plugin 分发（项目级配置 hooks 默认不启用，且 ZCode 没有 `PreCompact` 事件），
+因此本集成不写任何项目配置文件，也没有 `install`/`uninstall` 命令：
+
+```text
+memory-corridor zcode hook        # Hook 统一入口（stdin JSON 进，stdout JSON 出）
+memory-corridor zcode status      # 检查 Plugin 文件、安装缓存、python3、协议事实
+```
+
+### 安装
+
+在 ZCode 客户端：**Settings → Plugin Management → Discover → `+`** 添加本地目录
+（本仓库根目录，含 `.zcode-marketplace/marketplace.json`），然后安装并保持启用
+`memory-corridor` 插件。插件提供两个 `process` 型 hook（经 `${ZCODE_PLUGIN_ROOT}`
+定位 `hooks/zcode_hook.py` 最薄包装器，**无需 pip install**，只需 `python3` 在 PATH 上）：
+
+| Hook | matcher | 行为 |
+| --- | --- | --- |
+| `SessionStart` | `startup\|resume\|compact` | 用最新 state 现场重建 Recovery Packet 并注入 `additionalContext`；未初始化项目 no-op 不落任何文件；`clear` 不注入（用户主动清空上下文） |
+| `Stop` | （无） | 运行完成门禁；blocked 时返回 `decision: "block"` 与精简阻塞清单；`stop_hook_active` 后不再阻塞 |
+
+### 与 Codex/Claude 适配的协议差异
+
+| 维度 | Codex / Claude Code | ZCode |
+| --- | --- | --- |
+| 事件 | PreCompact / SessionStart / Stop | **无 PreCompact**；只接 SessionStart / Stop |
+| SessionStart 来源 | `resume\|compact` 注入 | `startup\|resume\|compact` 注入，`clear` 跳过 |
+| 放行输出 | `{"continue": true}` | **必须输出空**：ZCode 在 Stop 上把 `continue:true` 解释为请求续命 |
+| 阻塞输出 | `{"decision":"block","reason":…}` | 相同（客户端转续命并把 reason 注入上下文） |
+| 续命上限 | 自防循环（Claude 平台 8 次兜底） | **平台硬上限 3 次**；本适配每回合只用 1 次 |
+| 输出 schema | 宽松 | **严格**：任何多余键整份输出作废 |
+| 安装 | 写项目配置文件 + trust | Plugin 分发（客户端 Plugin Management），插件 hook 无 trust 门槛 |
+
+### 如何确认生效
+
+- **SessionStart**：在已初始化 Memory Corridor 的项目里新开/恢复 ZCode 会话（或 compact 后），
+  模型上下文应出现「记忆回廊（Context Guard Lite 2.0）Recovery Packet」；`memory-corridor
+  events list --type hook.session_start` 应出现 `platform=zcode` 的记录。
+- **Stop**：存在未完成 requirement 时尝试结束回合，ZCode 应收到阻塞清单并继续处理；
+  `events list --type hook.stop` 中 `decision=block` 即门禁实际生效。
+- 卸载/停用：客户端 Plugin Management 里禁用或卸载插件即可（hook 随插件移除）；
+  项目内临时放行用 `memory-corridor off`（记录保留）。
+
 ## 五层设计
 
 | 模块 | 责任 |
@@ -337,7 +385,7 @@ python3.11 -m unittest discover -s tests -p 'test_*.py'
 - 不把自然语言“看起来完成”当作证明；
 - 不自动替用户修改 requirements；
 - 不自动执行命令、安装依赖、上传云端或推送远端；
-- 不假装已经接入所有 Codex 生命周期 Hook（当前只接 PreCompact / SessionStart(resume|compact) / Stop 三个）；
+- 不假装已经接入所有 Codex 生命周期 Hook（当前只接 PreCompact / SessionStart(resume|compact) / Stop 三个）；ZCode 只接 SessionStart(startup|resume|compact) / Stop 两个（ZCode 没有 PreCompact 事件）；
 - 不绕过 Codex 的 hook trust 机制。
 
 Codex Hook 适配已作为外围薄层落地（v2.2.0），五层核心没有被做重；后续增强同样只应发生在外围。

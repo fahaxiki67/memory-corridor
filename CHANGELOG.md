@@ -5,6 +5,25 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.9.0] - 2026-09-11
+
+### 新增
+
+- **ZCode 原生 Plugin 集成（实验性）**：新增 `context_guard_lite/integrations/zcode.py` 协议适配层与 Plugin 分发文件（`.zcode-plugin/plugin.json`、`hooks/hooks.json`、`hooks/zcode_hook.py`、`.zcode-marketplace/marketplace.json`），在 Codex/Claude 适配之外支持 ZCode 的两个关键事件：
+  - **SessionStart**（matcher `startup|resume|compact`）：未初始化项目 no-op 不落文件；已初始化则从最新 `state.json` 现场重建 Recovery Packet 并经 `hookSpecificOutput.additionalContext` 注入；`clear` 视为用户主动清空上下文，不注入；从不读旧 `recovery.md`。
+  - **Stop**：自动运行完成门禁。未初始化/保护关闭/空账本/gate pass → 放行；blocked → 返回 `{"decision":"block","reason":<精简阻塞清单>}`；`stop_hook_active` 为真后不再阻塞（本适配每回合最多请求 1 次续命，远低于 ZCode 平台 3 次硬上限）；state 损坏按「无法读取 ≠ 通过」阻塞一次。
+- 新 CLI 子命令 `memory-corridor zcode hook` / `zcode status [--json]`（ZCode 的 hook 由 Plugin 分发，**没有** install/uninstall 命令，不写项目配置文件）。
+- 新增测试 30 项（协议契约、放行空输出、防续命循环、损坏 state、中文路径与空格、非法 JSON、不支持事件、wrapper 子进程、Plugin 文件结构、状态输出），总测试 119 项。
+
+### 变更
+
+- 协议事实以 ZCode 官方文档与客户端实现核对（2026-09-11）：ZCode 仅支持 7 种 hook 事件（**无 PreCompact**）；hook stdout 是严格 schema（多余键整份作废）；**Stop 上 `continue:true` 会触发续命**（与 Codex/Claude 相反），因此 ZCode 放行输出为空而不是 `{"continue":true}`。
+- 五层核心（contract/requirements/evidence/recovery/gate）与 Codex/Claude 集成零改动；`.context-guard/state.json` 仍是唯一业务状态来源。
+
+### 边界（如实）
+
+- **协议级测试通过，真实 ZCode E2E 待人工验证**：SessionStart 注入与 Stop 阻塞在真实 ZCode 客户端中的实际行为、本地 marketplace 安装交互、Windows 上 `python3` 别名可用性，均未验证。
+
 ## [2.8.0] - 2026-09-05
 
 ### 修复（重要：建议所有用户升级）
