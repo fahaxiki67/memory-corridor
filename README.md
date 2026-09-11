@@ -334,6 +334,41 @@ memory-corridor zcode status      # 检查 Plugin 文件、安装缓存、python
 - 卸载/停用：客户端 Plugin Management 里禁用或卸载插件即可（hook 随插件移除）；
   项目内临时放行用 `memory-corridor off`（记录保留）。
 
+### Windows 安装与验证（待人工验证）
+
+> **以下步骤在 macOS 上制定并验证了同等流程，Windows 本身尚未真机验证**（`python3` 别名、
+> 路径差异、24KB 截断均待确认）。按步骤执行并把每步"成功信号"记录下来即可完成人工验收。
+
+1. **确认 python3 可用**：PowerShell 运行 `python3 --version`。
+   成功信号：打印 `Python 3.11+` 版本号。若报"不是内部或外部命令"：安装
+   [Microsoft Store 版 Python](https://aka.ms/installpython)（自带 `python3` 别名），
+   或把 hooks/hooks.json 中两处 `"command": "python3"` 改为 `"py"`、`"args"` 首元素前加 `"-3"`。
+2. **取得插件目录**：从 [Releases](https://github.com/fahaxiki67/memory-corridor/releases) 下载
+   `memory-corridor-2.9.0-zcode-plugin.zip`（或 Source code (zip)），解压到**不含中文和空格**的
+   本地目录，例如 `C:\bqc-test\memory-corridor`。成功信号：解压后该目录下能看到
+   `.zcode-plugin\plugin.json` 和 `hooks\hooks.json`。
+3. **安装启用**：ZCode → Settings → Plugin Management → Discover → `+` → 选择解压目录
+   （含 marketplace.json 的目录）→ 安装并保持启用 `memory-corridor`。
+   成功信号：Installed 页出现 `memory-corridor` 且开关开启；终端运行
+   `zcode plugins list` 出现 `memory-corridor@…  hooks: 2`。
+4. **初始化测试项目**：`mkdir C:\bqc-test\e2e && cd /d C:\bqc-test\e2e &&
+   python3 -m context_guard_lite init --name win-e2e &&
+   python3 -m context_guard_lite requirements add "Windows E2E 验证项"`。
+   成功信号：`gate check` 显示 `BLOCKED`（R001 未完成）。
+5. **SessionStart**：在 ZCode 中打开该目录新建任务并随便发送一句话。
+   成功信号：模型上下文出现「Recovery Packet」；`.context-guard\events.jsonl` 追加
+   `"type":"hook.session_start","platform":"zcode","result":"injected"`。
+6. **Stop block / 防循环**：让模型结束回合。成功信号：events.jsonl 先出现
+   `"decision":"block","stop_hook_active":false`（阻塞清单回到模型），随后若仍阻塞出现
+   `"decision":"allow","stop_hook_active":true`（不再续命，会话正常结束）。
+7. **PASS 放行**：`python3 -m context_guard_lite evidence add --for R001 --result success
+   --summary "人工验证通过"`，再 `python3 -m context_guard_lite requirements done R001`，
+   新建任务再结束一回合。成功信号：events.jsonl 出现 `"decision":"allow","gate_status":"pass"`。
+8. **卸载/重复安装**：Plugin Management 卸载插件 → `zcode plugins list` 不再出现该插件且
+   events.jsonl 不再新增 hook 记录；重新安装 → `hooks: 2` 且不产生重复条目。
+
+任一"成功信号"未出现即记录现场（events.jsonl 尾部 + ZCode 日志 hook 记录）并开 issue。
+
 ## 五层设计
 
 | 模块 | 责任 |
