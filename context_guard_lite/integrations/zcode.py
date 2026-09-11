@@ -381,8 +381,8 @@ def zcode_hook_status(root: Path) -> dict:
             "pass_output": "empty（ZCode Stop 上 continue:true 会触发续命，放行必须输出空）",
             "session_start_e2e_verified": True,
             "session_start_e2e_note": "2026-09-11 在真实 ZCode CLI 0.16.5（headless --prompt）验证注入链路",
-            "stop_e2e_verified": False,
-            "stop_e2e_note": "Stop 阻塞的回合级观察待人工验证（headless 需 coding-plan API key；桌面端可按 README 步骤 10 秒验证）",
+            "stop_e2e_verified": True,
+            "stop_e2e_note": "2026-09-12 在真实 ZCode 桌面客户端验证：block（stop_hook_active=false）→续命→allow（防循环）→PASS allow 全链路，见 events.jsonl",
         },
     }
 

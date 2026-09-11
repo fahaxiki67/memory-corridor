@@ -389,7 +389,7 @@ class ZCodePluginFilesTests(unittest.TestCase):
         self.assertFalse(status["protocol"]["pre_compact_supported"])
         self.assertEqual(status["protocol"]["stop_continuation_limit"], 3)
         self.assertTrue(status["protocol"]["session_start_e2e_verified"])
-        self.assertFalse(status["protocol"]["stop_e2e_verified"])
+        self.assertTrue(status["protocol"]["stop_e2e_verified"])
         self.assertIsInstance(status["python3_on_path"], bool)
         self.assertIsInstance(installed_plugin_status()["installed"], bool)
 

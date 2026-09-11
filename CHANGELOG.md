@@ -23,7 +23,7 @@
 ### 边界（如实）
 
 - **SessionStart 已在真实 ZCode CLI（0.16.5，headless `--prompt`）端到端验证**（2026-09-11）：插件经 `plugins list` 显示 hooks:2，真实会话触发 SessionStart 并注入恢复包（events.jsonl `platform=zcode … result=injected`）；卸载后 hooks 消失、重复安装幂等（条目不重复）。
-- **Stop 阻塞的回合级观察待人工验证**：headless 会话需 coding-plan API key（OAuth token 不被接受），桌面端可按 README 步骤约 10 秒验证；Windows 上 `python3` 别名可用性、24KB 恢复包截断、本地 marketplace GUI 安装交互亦待人工。
+- **Stop 门禁已在真实 ZCode 桌面客户端端到端验证**（2026-09-12）：`decision=block`（stop_hook_active=false）→ 客户端续命 → 防循环放行（stop_hook_active=true）→ gate PASS 放行，全链路有 events.jsonl `platform=zcode` 记录。仍待人工：Windows 上 `python3` 别名可用性、24KB 恢复包截断、本地 marketplace GUI 安装交互。
 
 ## [2.8.0] - 2026-09-05
 

@@ -286,10 +286,11 @@ memory-corridor claude hook        # Hook 统一入口（与 codex hook 同一�
 
 ## ZCode 原生集成（Plugin）
 
-> **集成状态：实验性（v2.9.0 引入）。SessionStart 已在真实 ZCode CLI（0.16.5，headless）端到端验证；Stop 阻塞的回合级观察待人工验证。**
-> 协议事实以 ZCode 官方文档与客户端实现核对（2026-09-11）。已验证：插件注册/加载（`plugins list` hooks:2）、
-> 卸载、重复安装幂等、SessionStart 恢复包注入（events.jsonl `platform=zcode result=injected`）。
-> 待人工：Stop 阻塞观察（见下）、Windows、24KB 截断、marketplace GUI 交互。跑通或遇到问题请开 issue。
+> **集成状态：实验性（v2.9.0 引入）。macOS 真实 ZCode 客户端端到端已验证（CLI 0.16.5 + 桌面端，2026-09-11/12）。**
+> 已验证：插件注册/加载（`plugins list` hooks:2）、卸载、重复安装幂等、SessionStart 恢复包注入、
+> Stop 阻塞（decision=block → 客户端续命）、防循环（stop_hook_active 后放行）、gate PASS 放行
+> ——全部有 events.jsonl `platform=zcode` 记录。仍待人工：Windows、24KB 截断、marketplace GUI 交互。
+> 跑通或遇到问题请开 issue。
 
 ZCode 的 hook 只能通过 Plugin 分发（项目级配置 hooks 默认不启用，且 ZCode 没有 `PreCompact` 事件），
 因此本集成不写任何项目配置文件，也没有 `install`/`uninstall` 命令：
