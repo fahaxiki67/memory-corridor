@@ -337,6 +337,10 @@ launcher 任一在 PATH 上即可）：
   `events list --type hook.stop` 中 `decision=block` 即门禁实际生效。
 - 卸载/停用：客户端 Plugin Management 里禁用或卸载插件即可（hook 随插件移除）；
   项目内临时放行用 `memory-corridor off`（记录保留）。
+- **升级/卸载后的旧会话提示（预期行为，非故障）**：ZCode 在会话启动时解析并固定插件根路径，
+  升级或卸载后，**升级前就已开启的会话**其 hook 仍指向旧版本目录，回合结束时会看到
+  `can't open file .../<旧版本>/hooks/zcode_hook.py` 的 stderr 附加上下文——平台对 hook
+  失败是 fail-open（不阻塞会话），新开的会话自动解析到新版本路径，无需任何处理。
 
 ### Windows 安装与验证
 
