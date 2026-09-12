@@ -61,7 +61,38 @@ STOP_CONTINUATION_LIMIT = 3  # ZCode 客户端硬限制；本层每回合最多�
 WRAPPER_RELATIVE_PATH = Path("hooks") / "zcode_hook.py"
 HOOKS_RELATIVE_PATH = Path("hooks") / "hooks.json"
 MANIFEST_RELATIVE_PATH = Path(".zcode-plugin") / "plugin.json"
-HOOK_COMMAND_BASENAME = "python3"
+# 跨平台 hook 启动：hooks.json 用 type:command（走系统 shell），先试
+# python3（macOS/Linux 原生；Windows 上若 PATH 解析到 Store 存根会以非零
+# 退出），失败即回退 py -3（Windows 官方 launcher，py.exe 位于系统目录）。
+# ``||`` 与双引号在 cmd.exe 与 POSIX sh 下语义一致，一份配置双平台开箱即用
+# （2026-09-12 在 Windows ZCode CLI 0.16.5 真机验证 hook 链路可启动）。
+HOOK_INTERPRETER_COMMANDS = ("python3", "py")
+WRAPPER_BASENAME = "zcode_hook.py"
+
+
+def _is_memory_corridor_handler(handler: object) -> bool:
+    """识别 hooks.json 中属于本插件的 handler（process 与 command 两型）。
+
+    process 型：args 里引用 wrapper 脚本；command 型：整条 shell 命令串里
+    引用 wrapper 脚本（无论用哪个解释器/回退组合启动）。
+    """
+    if not isinstance(handler, dict):
+        return False
+    handler_type = handler.get("type")
+    if handler_type == "process":
+        return any(
+            isinstance(arg, str) and WRAPPER_BASENAME in Path(arg.replace("\\", "/")).name
+            for arg in (handler.get("args") or [])
+        )
+    if handler_type == "command":
+        command = handler.get("command")
+        return isinstance(command, str) and WRAPPER_BASENAME in command
+    return False
+
+
+def hook_interpreter_available() -> bool:
+    """本机是否存在任一可用的 hook 解释器（python3 或 Windows py launcher）。"""
+    return any(shutil.which(command) for command in HOOK_INTERPRETER_COMMANDS)
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +342,7 @@ def plugin_files_status(root: Path) -> dict:
             matcher = None
             for group in groups:
                 for handler in group.get("hooks", []):
-                    if isinstance(handler, dict) and HOOK_COMMAND_BASENAME == handler.get("command"):
+                    if _is_memory_corridor_handler(handler):
                         configured = True
                         matcher = group.get("matcher")
             result["events"][event] = {
@@ -368,7 +399,11 @@ def zcode_hook_status(root: Path) -> dict:
         "platform": "zcode",
         "plugin_files": plugin_files_status(paths.root),
         "installed": installed_plugin_status(),
-        "python3_on_path": shutil.which(HOOK_COMMAND_BASENAME) is not None,
+        "hook_interpreter_on_path": hook_interpreter_available(),
+        "hook_interpreters_on_path": {
+            command: shutil.which(command) is not None
+            for command in HOOK_INTERPRETER_COMMANDS
+        },
         "memory_corridor_on_path": shutil.which("memory-corridor") is not None,
         "project_initialized": paths.state.exists(),
         "protection_enabled": protection_enabled,
@@ -380,7 +415,10 @@ def zcode_hook_status(root: Path) -> dict:
             "stop_continuation_limit": STOP_CONTINUATION_LIMIT,
             "pass_output": "empty（ZCode Stop 上 continue:true 会触发续命，放行必须输出空）",
             "session_start_e2e_verified": True,
-            "session_start_e2e_note": "2026-09-11 在真实 ZCode CLI 0.16.5（headless --prompt）验证注入链路",
+            "session_start_e2e_note": (
+                "2026-09-11 在真实 ZCode CLI 0.16.5（headless --prompt，macOS）验证注入链路；"
+                "2026-09-12 在真实 ZCode CLI 0.16.5（Windows，py -3 回退路径）验证 hook 启动与注入"
+            ),
             "stop_e2e_verified": True,
             "stop_e2e_note": "2026-09-12 在真实 ZCode 桌面客户端验证：block（stop_hook_active=false）→续命→allow（防循环）→PASS allow 全链路，见 events.jsonl",
         },
@@ -395,9 +433,11 @@ def _read_enabled(paths: ProjectPaths) -> bool:
 
 __all__ = [
     "HOOK_COMMAND",
+    "HOOK_INTERPRETER_COMMANDS",
     "SUPPORTED_EVENTS",
     "STOP_CONTINUATION_LIMIT",
     "handle_zcode_hook_event",
+    "hook_interpreter_available",
     "installed_plugin_status",
     "plugin_files_status",
     "run_zcode_hook_command",

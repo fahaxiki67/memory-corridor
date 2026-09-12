@@ -5,6 +5,22 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.9.1] - 2026-09-12
+
+### 修复（重要：Windows 用户请升级）
+
+- **ZCode Plugin hook 在 Windows 上开箱即用**：`hooks/hooks.json` 从 `type:"process"` + 固定 `python3` 命令改为 `type:"command"` shell 命令 `python3 … || py -3 …`——macOS/Linux 走原生 `python3`；Windows 上 `python3` 不可用（或解析到 Store 存根非零退出）时自动回退官方 `py -3` launcher。`||` 与双引号在 cmd.exe 与 POSIX sh 下语义一致，一份配置双平台生效，Windows 用户不再需要手工改 hooks.json。
+- Windows 真机验证（2026-09-12，ZCode CLI 0.16.5 / Windows 10 x64 / Python 3.13）：跨平台 hook 命令成功拉起 wrapper，SessionStart 注入恢复包（events.jsonl `result=injected`）；`zcode plugins list` 显示 `hooks: 2`。119 项测试全绿。
+
+### 变更
+
+- `memory-corridor zcode status`：`python3_on_path` 字段升级为 `hook_interpreter_on_path`（任一解释器可用即 True）与 `hook_interpreters_on_path`（逐个解释器可用性明细）；hooks.json 自检从「匹配固定命令名」改为识别 wrapper 引用（同时兼容 process 型旧安装与 command 型本版），不再误报「未配置」。
+- 运行条件输出同步改为按解释器逐个展示可用性。
+
+### 边界（如实）
+
+- **Stop 门禁真机验证仍为 macOS 桌面客户端级别**（2026-09-12，见 2.9.0）：Windows 真机已完成 hook 启动链路验证（SessionStart 注入），Stop 的 block→续命→PASS 全链路在 Windows 上待人工按 README「Windows 安装与验证」步骤 6–7 复核（headless CLI 缺 API key 凭据，无法自动化驱动完整回合）。
+
 ## [2.9.0] - 2026-09-11
 
 ### 新增

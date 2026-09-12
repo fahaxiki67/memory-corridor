@@ -337,10 +337,24 @@ class ZCodePluginFilesTests(unittest.TestCase):
         self.assertNotIn("matcher", hooks["hooks"]["Stop"][0])
         for event in ("SessionStart", "Stop"):
             handler = hooks["hooks"][event][0]["hooks"][0]
-            self.assertEqual(handler["type"], "process")
-            self.assertEqual(handler["command"], "python3")
-            self.assertIn("${ZCODE_PLUGIN_ROOT}/hooks/zcode_hook.py", handler["args"][0])
+            # 跨平台启动：type:command 走系统 shell，先试 python3（macOS/Linux），
+            # 失败回退 py -3（Windows）；|| 与双引号在 cmd.exe 与 POSIX sh 下语义一致。
+            self.assertEqual(handler["type"], "command")
+            self.assertIn("python3", handler["command"])
+            self.assertIn("py -3", handler["command"])
+            self.assertIn("${ZCODE_PLUGIN_ROOT}/hooks/zcode_hook.py", handler["command"])
             self.assertIsInstance(handler["timeoutMs"], int)
+        # _is_memory_corridor_handler 须同时识别 process 型（旧安装）与 command 型（本版）。
+        from context_guard_lite.integrations.zcode import _is_memory_corridor_handler
+
+        self.assertTrue(
+            _is_memory_corridor_handler(
+                {"type": "process", "command": "python3", "args": ["${ZCODE_PLUGIN_ROOT}/hooks/zcode_hook.py"]}
+            )
+        )
+        self.assertTrue(_is_memory_corridor_handler({"type": "command", "command": 'python3 "x/zcode_hook.py" || py -3 "x/zcode_hook.py"'}))
+        self.assertFalse(_is_memory_corridor_handler({"type": "command", "command": "other-tool --run"}))
+        self.assertFalse(_is_memory_corridor_handler({"type": "process", "command": "node", "args": ["other.js"]}))
         marketplace = json.loads((REPO_ROOT / ".zcode-marketplace" / "marketplace.json").read_text(encoding="utf-8"))
         self.assertEqual(marketplace["plugins"][0]["source"], "./")
 
@@ -390,7 +404,8 @@ class ZCodePluginFilesTests(unittest.TestCase):
         self.assertEqual(status["protocol"]["stop_continuation_limit"], 3)
         self.assertTrue(status["protocol"]["session_start_e2e_verified"])
         self.assertTrue(status["protocol"]["stop_e2e_verified"])
-        self.assertIsInstance(status["python3_on_path"], bool)
+        self.assertIsInstance(status["hook_interpreter_on_path"], bool)
+        self.assertIsInstance(status["hook_interpreters_on_path"], dict)
         self.assertIsInstance(installed_plugin_status()["installed"], bool)
 
     def test_status_handles_uninitialized_project(self) -> None:

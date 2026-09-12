@@ -297,15 +297,17 @@ ZCode 的 hook 只能通过 Plugin 分发（项目级配置 hooks 默认不启�
 
 ```text
 memory-corridor zcode hook        # Hook 统一入口（stdin JSON 进，stdout JSON 出）
-memory-corridor zcode status      # 检查 Plugin 文件、安装缓存、python3、协议事实
+memory-corridor zcode status      # 检查 Plugin 文件、安装缓存、解释器可用性、协议事实
 ```
 
 ### 安装
 
 在 ZCode 客户端：**Settings → Plugin Management → Discover → `+`** 添加本地目录
 （本仓库根目录，含 `.zcode-marketplace/marketplace.json`），然后安装并保持启用
-`memory-corridor` 插件。插件提供两个 `process` 型 hook（经 `${ZCODE_PLUGIN_ROOT}`
-定位 `hooks/zcode_hook.py` 最薄包装器，**无需 pip install**，只需 `python3` 在 PATH 上）：
+`memory-corridor` 插件。插件提供两个 hook（经 `${ZCODE_PLUGIN_ROOT}`
+定位 `hooks/zcode_hook.py` 最薄包装器，**无需 pip install**；hook 启动命令
+`python3 … || py -3 …` 跨平台自动回退，macOS/Linux 需 `python3`、Windows 需 `py`
+launcher 任一在 PATH 上即可）：
 
 | Hook | matcher | 行为 |
 | --- | --- | --- |
@@ -334,17 +336,21 @@ memory-corridor zcode status      # 检查 Plugin 文件、安装缓存、python
 - 卸载/停用：客户端 Plugin Management 里禁用或卸载插件即可（hook 随插件移除）；
   项目内临时放行用 `memory-corridor off`（记录保留）。
 
-### Windows 安装与验证（待人工验证）
+### Windows 安装与验证
 
-> **以下步骤在 macOS 上制定并验证了同等流程，Windows 本身尚未真机验证**（`python3` 别名、
-> 路径差异、24KB 截断均待确认）。按步骤执行并把每步"成功信号"记录下来即可完成人工验收。
+> **2.9.1 起 hook 启动跨平台自动回退，Windows 无需改任何文件**：hooks.json 用 shell 命令
+> `python3 … || py -3 …`，macOS/Linux 走 `python3`，Windows 上 `python3` 不可用时自动回退
+> 官方 `py -3` launcher。2026-09-12 已在真实 ZCode CLI 0.16.5（Windows 10 x64）真机验证：
+> hook 成功拉起 wrapper、SessionStart 注入恢复包（events.jsonl `result=injected`）。
+> **Stop 的 block→续命→PASS 全链路在 Windows 上仍待人工复核**（macOS 桌面客户端已于
+> 2026-09-12 真机验证全通过）；缺中文/空格路径规避、24KB 截断行为也待确认。
 
-1. **确认 python3 可用**：PowerShell 运行 `python3 --version`。
-   成功信号：打印 `Python 3.11+` 版本号。若报"不是内部或外部命令"：安装
-   [Microsoft Store 版 Python](https://aka.ms/installpython)（自带 `python3` 别名），
-   或把 hooks/hooks.json 中两处 `"command": "python3"` 改为 `"py"`、`"args"` 首元素前加 `"-3"`。
+1. **确认解释器可用**：PowerShell 运行 `py -3 --version`（官方 Python 安装器默认装 py
+   launcher；若没有，从 [python.org](https://www.python.org/downloads/) 安装时勾选
+   "py launcher"）。成功信号：打印 `Python 3.11+` 版本号。`python3` 可用与否不影响——
+   hook 会自动回退。
 2. **取得插件目录**：从 [Releases](https://github.com/fahaxiki67/memory-corridor/releases) 下载
-   `memory-corridor-2.9.0-zcode-plugin.zip`（或 Source code (zip)），解压到**不含中文和空格**的
+   `memory-corridor-2.9.1-zcode-plugin.zip`（或 Source code (zip)），解压到**不含中文和空格**的
    本地目录，例如 `C:\bqc-test\memory-corridor`。成功信号：解压后该目录下能看到
    `.zcode-plugin\plugin.json` 和 `hooks\hooks.json`。
 3. **安装启用**：ZCode → Settings → Plugin Management → Discover → `+` → 选择解压目录
@@ -352,8 +358,8 @@ memory-corridor zcode status      # 检查 Plugin 文件、安装缓存、python
    成功信号：Installed 页出现 `memory-corridor` 且开关开启；终端运行
    `zcode plugins list` 出现 `memory-corridor@…  hooks: 2`。
 4. **初始化测试项目**：`mkdir C:\bqc-test\e2e && cd /d C:\bqc-test\e2e &&
-   python3 -m context_guard_lite init --name win-e2e &&
-   python3 -m context_guard_lite requirements add "Windows E2E 验证项"`。
+   py -3 -m context_guard_lite init --name win-e2e &&
+   py -3 -m context_guard_lite requirements add "Windows E2E 验证项"`。
    成功信号：`gate check` 显示 `BLOCKED`（R001 未完成）。
 5. **SessionStart**：在 ZCode 中打开该目录新建任务并随便发送一句话。
    成功信号：模型上下文出现「Recovery Packet」；`.context-guard\events.jsonl` 追加
@@ -361,8 +367,8 @@ memory-corridor zcode status      # 检查 Plugin 文件、安装缓存、python
 6. **Stop block / 防循环**：让模型结束回合。成功信号：events.jsonl 先出现
    `"decision":"block","stop_hook_active":false`（阻塞清单回到模型），随后若仍阻塞出现
    `"decision":"allow","stop_hook_active":true`（不再续命，会话正常结束）。
-7. **PASS 放行**：`python3 -m context_guard_lite evidence add --for R001 --result success
-   --summary "人工验证通过"`，再 `python3 -m context_guard_lite requirements done R001`，
+7. **PASS 放行**：`py -3 -m context_guard_lite evidence add --for R001 --result success
+   --summary "人工验证通过"`，再 `py -3 -m context_guard_lite requirements done R001`，
    新建任务再结束一回合。成功信号：events.jsonl 出现 `"decision":"allow","gate_status":"pass"`。
 8. **卸载/重复安装**：Plugin Management 卸载插件 → `zcode plugins list` 不再出现该插件且
    events.jsonl 不再新增 hook 记录；重新安装 → `hooks: 2` 且不产生重复条目。

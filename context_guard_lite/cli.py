@@ -500,9 +500,10 @@ def _cmd_claude(paths, args) -> int:
 
 
 ZCODE_EXPERIMENTAL_NOTICE = (
-    "状态：实验性（v2.9.0 引入）。协议事实以 ZCode 官方文档与客户端实现核对，\n"
-    "协议级测试已覆盖，但尚未在真实 ZCode 会话中完成端到端验收\n"
-    "（SessionStart 注入、Stop 阻塞的实际行为待真机确认）。\n"
+    "状态：实验性（v2.9.0 引入，v2.9.1 起 hook 启动跨平台自动回退）。\n"
+    "真机验收：SessionStart 注入已在 macOS（2026-09-11）与 Windows（2026-09-12）\n"
+    "真实 ZCode CLI 验证；Stop 门禁已在 macOS 桌面客户端全链路验证（2026-09-12），\n"
+    "Windows 的 Stop 全链路与 24KB 截断行为待人工复核。\n"
     "ZCode 的 Hook 由 Plugin 分发：不写项目配置文件，也没有 install/uninstall 命令；\n"
     "安装/卸载通过 ZCode 客户端的 Settings → Plugin Management 完成。"
 )
@@ -542,7 +543,12 @@ def _print_zcode_status(result: dict) -> int:
     else:
         print(f"- 缓存中未发现 memory-corridor 插件（{installed['cache_root']}）")
     print("运行条件：")
-    print(f"- python3：{'PATH 上可用' if result['python3_on_path'] else 'PATH 上找不到（hook 将无法启动；Windows 需自行提供 python3 别名）'}")
+    interpreters = result.get("hook_interpreters_on_path", {})
+    interp_desc = "、".join(f"{name} {'✓' if ok else '✗'}" for name, ok in interpreters.items())
+    print(
+        f"- hook 解释器：{'可用' if result.get('hook_interpreter_on_path') else '均不可用'}"
+        f"（{interp_desc}；hooks.json 先试 python3，失败回退 py -3，任一可用即可启动）"
+    )
     print(f"- memory-corridor 命令：{'PATH 上可用（可选）' if result['memory_corridor_on_path'] else '不在 PATH（可选；wrapper 无需安装即可运行）'}")
     print(f"当前项目：{'已初始化' if result['project_initialized'] else '未初始化（hook 按约定 no-op）'}", end="")
     if result["protection_enabled"] is not None:

@@ -5,9 +5,8 @@
         "matcher": "startup|resume|compact",
         "hooks": [
           {
-            "type": "process",
-            "command": "python3",
-            "args": ["${ZCODE_PLUGIN_ROOT}/hooks/zcode_hook.py"],
+            "type": "command",
+            "command": "python3 \"${ZCODE_PLUGIN_ROOT}/hooks/zcode_hook.py\" || py -3 \"${ZCODE_PLUGIN_ROOT}/hooks/zcode_hook.py\"",
             "timeoutMs": 15000,
             "statusMessage": "Restoring Memory Corridor working state"
           }
@@ -18,9 +17,8 @@
       {
         "hooks": [
           {
-            "type": "process",
-            "command": "python3",
-            "args": ["${ZCODE_PLUGIN_ROOT}/hooks/zcode_hook.py"],
+            "type": "command",
+            "command": "python3 \"${ZCODE_PLUGIN_ROOT}/hooks/zcode_hook.py\" || py -3 \"${ZCODE_PLUGIN_ROOT}/hooks/zcode_hook.py\"",
             "timeoutMs": 15000,
             "statusMessage": "Checking Memory Corridor completion gate"
           }
