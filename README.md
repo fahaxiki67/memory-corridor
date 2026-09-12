@@ -341,6 +341,9 @@ launcher 任一在 PATH 上即可）：
   升级或卸载后，**升级前就已开启的会话**其 hook 仍指向旧版本目录，回合结束时会看到
   `can't open file .../<旧版本>/hooks/zcode_hook.py` 的 stderr 附加上下文——平台对 hook
   失败是 fail-open（不阻塞会话），新开的会话自动解析到新版本路径，无需任何处理。
+  如需让遗留旧会话也完全静默，可把新版本缓存目录复制一份为旧版本目录名作兼容别名
+  （Windows：`Copy-Item ...\cache\<marketplace>\<plugin>\<新版本> ...\<旧版本> -Recurse`），
+  该别名只服务存量会话，升级记录仍指向新版本。
 
 ### Windows 安装与验证
 

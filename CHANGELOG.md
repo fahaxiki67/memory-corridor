@@ -5,6 +5,17 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.9.3] - 2026-09-13
+
+### 文档与验证记录
+
+- **Windows 真机多轮复测通过（v2.9.2 本体）**：headless CLI + 本地 Anthropic 协议 mock，连续 3 轮独立会话行为完全一致——英文路径 open 账本（注入 → block → 续命 → 防循环 allow）、补齐 evidence 后（注入 → PASS allow）、含中文与空格路径（注入 → block → 防循环 allow）。
+- README 补充：升级/卸载后旧会话 hook 报错的预期行为（fail-open）与「复制新版本目录为旧版本名作兼容别名」的静默方案。
+
+### 无代码变更
+
+本版仅为文档与验证记录更新；插件行为与 2.9.2 完全一致。
+
 ## [2.9.2] - 2026-09-12
 
 ### 修复
