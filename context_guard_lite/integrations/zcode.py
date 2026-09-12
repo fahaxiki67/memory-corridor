@@ -420,7 +420,11 @@ def zcode_hook_status(root: Path) -> dict:
                 "2026-09-12 在真实 ZCode CLI 0.16.5（Windows，py -3 回退路径）验证 hook 启动与注入"
             ),
             "stop_e2e_verified": True,
-            "stop_e2e_note": "2026-09-12 在真实 ZCode 桌面客户端验证：block（stop_hook_active=false）→续命→allow（防循环）→PASS allow 全链路，见 events.jsonl",
+            "stop_e2e_note": (
+                "2026-09-12 双平台真机验证：macOS 桌面客户端与 Windows headless CLI"
+                "（本地 Anthropic 协议 mock 驱动真实回合）均为 block（stop_hook_active=false）"
+                "→续命→allow（防循环）→PASS allow 全链路，见 events.jsonl"
+            ),
         },
     }
 

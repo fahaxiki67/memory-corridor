@@ -5,6 +5,17 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.9.2] - 2026-09-12
+
+### 修复
+
+- **恢复包自限 20000 字符（24KB 截断实锤后的防御）**：核对 ZCode 客户端源码确认 SessionStart 注入在 **24000 字符**处被 `truncateForHook` 静默截尾（超限内容直接丢失结尾的 Completion Gate 指引）。恢复包条目数本有界，但单条 requirement/evidence/note 文本无上限，极端账本仍可能超限。`recovery.build_packet` 现按信息价值降级自限：先省略旁记事本（占位指向 notebook.md）→ 省略已完成段 → evidence 只留前 3 条 → 超长行截到 200 字符 → 兜底保留包头与 Completion Gate 段。新增 2 项测试覆盖降级顺序与端到端上限，总测试 121 项。
+
+### 验证更新（Windows 真机全链路闭环）
+
+- **Stop 门禁全链路已在 Windows 真机验证**（2026-09-12，ZCode CLI 0.16.5 / Win10 x64）：headless CLI + 本地 Anthropic Messages 协议 mock 服务驱动**真实模型回合**，events.jsonl 完整记录 `SessionStart injected → Stop block（stop_hook_active=false）→ 续命 → allow（stop_hook_active=true）→ PASS allow（gate_status=pass）`——与 macOS 桌面端结论一致。README 记录了复现方法。
+- **含中文与空格的项目路径**：hook 链路（SessionStart 注入 + Stop 门禁）在同一真机实测通过。
+
 ## [2.9.1] - 2026-09-12
 
 ### 修复（重要：Windows 用户请升级）

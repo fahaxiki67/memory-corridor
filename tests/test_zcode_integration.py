@@ -231,6 +231,58 @@ class ZCodeSessionStartTests(unittest.TestCase):
         context = outcome.output["hookSpecificOutput"]["additionalContext"]
         self.assertLess(len(context), 30000)
 
+    def test_packet_self_limits_before_client_truncation(self) -> None:
+        """超长单条文本（requirement/evidence/note）触发自限，不依赖客户端截断。"""
+        from context_guard_lite.recovery import PACKET_CHAR_LIMIT, build_packet
+
+        self._init_with_requirement("zcode-limit")
+        paths = project_paths(self.root)
+        for index in range(30):
+            add_requirement(paths, "超长描述" + "内" * 800 + str(index))
+            add_evidence(paths, f"R{index + 2:03d}", "超长摘要" + "证" * 800, "success")
+        packet = build_packet(paths)
+        self.assertLessEqual(len(packet), PACKET_CHAR_LIMIT)
+        # 客户端截断点（24000）之上不再有内容；Completion Gate 指引必须存活。
+        self.assertIn("## Completion Gate", packet)
+        self.assertIn("下一步", packet)
+
+    def test_fit_packet_degradation_order(self) -> None:
+        """降级顺序：先牺牲旁记事本，再牺牲已完成/evidence，超长行截断，兜底保 Gate。"""
+        from context_guard_lite.recovery import PACKET_CHAR_LIMIT, _fit_packet
+
+        head = "# 记忆回廊（Context Guard Lite 2.0）Recovery Packet\n\n## 当前 requirements\n\n- [ ] R001 [must] v1 [open]: 做事\n"
+        completed = "\n## 已完成\n\n" + "\n".join(f"- [x] R{i:03d} v1: " + "完" * 300 for i in range(40)) + "\n"
+        evidence = "\n## 最近 evidence\n\n" + "\n".join(f"- E{i:03d} → R{i:03d} v1 [success] " + "证" * 300 for i in range(40)) + "\n"
+        notebook = "\n## 旁记事本最近记录\n\n" + "\n".join("n" * 300 for _ in range(40)) + "\n"
+        gate = "\n## Completion Gate\n\n- 状态：blocked\n- 结论：仍有待办。\n"
+        full = head + completed + evidence + notebook + gate
+
+        # 分支 1：丢旁记事本
+        step1 = _fit_packet(full)
+        self.assertLessEqual(len(step1), PACKET_CHAR_LIMIT)
+        self.assertIn("旁记事本超出注入上限已省略", step1)
+        self.assertIn("## Completion Gate", step1)
+
+        # 分支 2/3：旁记事本已无 → 丢已完成 → evidence 只留 3 条
+        no_notebook = head + completed + evidence + gate
+        step2 = _fit_packet(no_notebook)
+        self.assertLessEqual(len(step2), PACKET_CHAR_LIMIT)
+        self.assertIn("已完成 requirement 超出注入上限已省略", step2)
+
+        # 分支 4：超长行截断后放得下 → Gate 存活，无需省略
+        monster = head + "- [ ] R002 [must] v1 [open]: " + "巨" * 60000 + "\n" + gate
+        step4 = _fit_packet(monster)
+        self.assertLessEqual(len(step4), PACKET_CHAR_LIMIT)
+        self.assertIn("## Completion Gate", step4)
+        self.assertIn("…", step4)
+
+        # 分支 5 兜底：海量长行截断后仍放不下 → 中间省略，Gate 必须存活
+        monster2 = head + "\n".join(f"- [ ] R{i:03d} [must] v1 [open]: " + "巨" * 3000 for i in range(300)) + "\n" + gate
+        step5 = _fit_packet(monster2)
+        self.assertLessEqual(len(step5), PACKET_CHAR_LIMIT)
+        self.assertIn("## Completion Gate", step5)
+        self.assertIn("已省略", step5)
+
 
 class ZCodeProtocolBoundaryTests(unittest.TestCase):
     """非法输入、不支持事件与 CLI 入口契约。"""

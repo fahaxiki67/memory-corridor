@@ -286,11 +286,13 @@ memory-corridor claude hook        # Hook 统一入口（与 codex hook 同一�
 
 ## ZCode 原生集成（Plugin）
 
-> **集成状态：实验性（v2.9.0 引入）。macOS 真实 ZCode 客户端端到端已验证（CLI 0.16.5 + 桌面端，2026-09-11/12）。**
+> **集成状态：实验性（v2.9.0 引入）。macOS 与 Windows 真实 ZCode 客户端端到端均已验证
+> （CLI 0.16.5，2026-09-11/12）。**
 > 已验证：插件注册/加载（`plugins list` hooks:2）、卸载、重复安装幂等、SessionStart 恢复包注入、
 > Stop 阻塞（decision=block → 客户端续命）、防循环（stop_hook_active 后放行）、gate PASS 放行
-> ——全部有 events.jsonl `platform=zcode` 记录。仍待人工：Windows、24KB 截断、marketplace GUI 交互。
-> 跑通或遇到问题请开 issue。
+> ——全部有 events.jsonl `platform=zcode` 记录；Windows 上含中文与空格的项目路径实测通过；
+> 恢复包长度经 v2.9.2 自限（客户端在 24000 字符处截断，本插件自限 20000，不会触发客户端截尾）。
+> 仍待人工：marketplace GUI 安装交互。遇到问题请开 issue。
 
 ZCode 的 hook 只能通过 Plugin 分发（项目级配置 hooks 默认不启用，且 ZCode 没有 `PreCompact` 事件），
 因此本集成不写任何项目配置文件，也没有 `install`/`uninstall` 命令：
@@ -340,10 +342,11 @@ launcher 任一在 PATH 上即可）：
 
 > **2.9.1 起 hook 启动跨平台自动回退，Windows 无需改任何文件**：hooks.json 用 shell 命令
 > `python3 … || py -3 …`，macOS/Linux 走 `python3`，Windows 上 `python3` 不可用时自动回退
-> 官方 `py -3` launcher。2026-09-12 已在真实 ZCode CLI 0.16.5（Windows 10 x64）真机验证：
-> hook 成功拉起 wrapper、SessionStart 注入恢复包（events.jsonl `result=injected`）。
-> **Stop 的 block→续命→PASS 全链路在 Windows 上仍待人工复核**（macOS 桌面客户端已于
-> 2026-09-12 真机验证全通过）；缺中文/空格路径规避、24KB 截断行为也待确认。
+> 官方 `py -3` launcher。2026-09-12 已在真实 ZCode CLI 0.16.5（Windows 10 x64）真机完成
+> **全链路验证**：hook 拉起 wrapper、SessionStart 注入、Stop 门禁阻塞（block → 客户端续命）、
+> 防循环放行、gate PASS 放行——headless CLI 会话驱动真实回合，全链路有 events.jsonl 记录；
+> 含中文与空格的项目路径实测通过。验证方法：本地起 Anthropic Messages 协议 mock 服务作
+> `provider.<id>.options.baseURL`，headless `--prompt` 驱动回合即可复现。
 
 1. **确认解释器可用**：PowerShell 运行 `py -3 --version`（官方 Python 安装器默认装 py
    launcher；若没有，从 [python.org](https://www.python.org/downloads/) 安装时勾选
