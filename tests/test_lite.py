@@ -466,3 +466,28 @@ class LedgerQueryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_events_list_warns_on_malformed_lines() -> None:
+    """审计日志损坏必须显式可见：events list 跳过坏行时在 stderr 告警，不让损坏冒充为空。"""
+    import contextlib as _contextlib
+    import io as _io
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        init_project(root, "audit-project")
+        paths = project_paths(root)
+
+        with _contextlib.redirect_stdout(_io.StringIO()) as out:
+            self_eq_zero = main(["--root", str(root), "events", "list"])
+        assert self_eq_zero == 0
+        assert "contract.init" in out.getvalue()  # 正常事件照常列出
+
+        with paths.events.open("a", encoding="utf-8") as fh:
+            fh.write('{"at": "2026-01-01T00:00:00Z", "type": "requirement.a\n')  # 截断的 JSON
+            fh.write("not-json-at-all\n")  # 非 JSON 行
+
+        with _contextlib.redirect_stdout(_io.StringIO()) as out, _contextlib.redirect_stderr(_io.StringIO()) as err:
+            assert main(["--root", str(root), "events", "list"]) == 0
+        assert "2 行事件无法解析" in err.getvalue()  # 坏行计数显式告警
+        assert "contract.init" in out.getvalue()  # 有效事件不受影响

@@ -188,14 +188,25 @@ def notebook_tail(paths: ProjectPaths, limit: int = 20) -> list[str]:
     return lines[-limit:]
 
 
-def read_events(paths: ProjectPaths, *, limit: int | None = None, event_type: str | None = None) -> list[dict]:
-    """只读读取 events.jsonl；跳过无法解析的行，不修改文件。"""
+def read_events(
+    paths: ProjectPaths,
+    *,
+    limit: int | None = None,
+    event_type: str | None = None,
+    malformed: dict | None = None,
+) -> list[dict]:
+    """只读读取 events.jsonl；跳过无法解析的行，不修改文件。
+
+    ``malformed`` 传入 dict 时回填 ``{"count": N}``（N=被跳过的无法解析行数），
+    供调用方向用户显式告警：审计日志损坏不应与空日志不可区分。
+    """
     _ensure_initialized(paths)
     try:
         raw_lines = paths.events.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError as exc:
         raise GuardError(f"无法读取事件日志: {exc}") from exc
     events: list[dict] = []
+    skipped = 0
     for line in raw_lines:
         line = line.strip()
         if not line:
@@ -203,12 +214,16 @@ def read_events(paths: ProjectPaths, *, limit: int | None = None, event_type: st
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
+            skipped += 1
             continue
         if not isinstance(event, dict):
+            skipped += 1
             continue
         if event_type is not None and event.get("type") != event_type:
             continue
         events.append(event)
+    if malformed is not None:
+        malformed["count"] = skipped
     if limit is not None:
         events = events[-limit:] if limit > 0 else []
     return events

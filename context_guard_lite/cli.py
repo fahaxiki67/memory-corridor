@@ -441,7 +441,12 @@ def _print_codex_uninstall(result: dict) -> int:
 
 def _cmd_events(paths, args) -> int:
     if args.events_command == "list":
-        events = read_events(paths, limit=args.limit, event_type=args.event_type)
+        malformed: dict = {}
+        events = read_events(paths, limit=args.limit, event_type=args.event_type, malformed=malformed)
+        skipped = malformed.get("count", 0)
+        if skipped:
+            # 审计日志出现无法解析的行必须显式可见，不能让"日志损坏"冒充"日志为空"。
+            print(f"警告：{skipped} 行事件无法解析，已跳过（日志可能被截断或损坏，重要审计场景请人工核对）。", file=sys.stderr)
         if not events:
             print("暂无匹配的事件。")
             return 0
