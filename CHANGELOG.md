@@ -5,6 +5,18 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.9.4] - 2026-09-18
+
+### Changed
+
+- `events list` 对无法解析的 JSONL 行在 stderr 输出明确告警，同时保持 stdout 的有效事件机器可读。
+- `read_events` 以可选出参返回跳过行数；既有调用方保持兼容，损坏或截断事件日志不再与空日志无提示地混淆。
+
+### Verification boundary
+
+- PR CI 覆盖 Ubuntu、macOS、Windows 与 Python 3.11–3.14；本版为小版本修复发布。
+- Release 不宣称替代真实客户端验收；ZCode/Claude/Codex 集成仍以 README 中各自的验证边界为准。
+
 ## [2.9.3] - 2026-09-13
 
 ### 文档与验证记录
