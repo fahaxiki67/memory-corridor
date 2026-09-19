@@ -382,7 +382,7 @@ launcher 任一在 PATH 上即可）：
    "py launcher"）。成功信号：打印 `Python 3.11+` 版本号。`python3` 可用与否不影响——
    hook 会自动回退。
 2. **取得插件目录**：从 [Releases](https://github.com/fahaxiki67/memory-corridor/releases) 下载
-   `memory-corridor-2.9.1-zcode-plugin.zip`（或 Source code (zip)），解压到**不含中文和空格**的
+   最新版本的 `memory-corridor-<版本>-zcode-plugin.zip`（或 Source code (zip)），解压到**不含中文和空格**的
    本地目录，例如 `C:\bqc-test\memory-corridor`。成功信号：解压后该目录下能看到
    `.zcode-plugin\plugin.json` 和 `hooks\hooks.json`。
 3. **安装启用**：ZCode → Settings → Plugin Management → Discover → `+` → 选择解压目录
