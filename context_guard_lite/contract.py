@@ -9,6 +9,9 @@ from pathlib import Path
 
 APP_DIR_NAME = ".context-guard"
 SCHEMA_VERSION = 1
+GITIGNORE_NAME = ".gitignore"
+DATA_IGNORE_ENTRY = ".context-guard/"
+_GITIGNORE_NOTE = "# The local ledger can contain task text and should not be committed by accident."
 
 
 class GuardError(RuntimeError):
@@ -72,7 +75,31 @@ def _ensure_initialized(paths: ProjectPaths) -> None:
         raise GuardError(f"当前目录未初始化，请先运行: memory-corridor init\n目录: {paths.root}")
 
 
-def init_project(root: Path | str | None = None, name: str | None = None) -> dict:
+def ensure_gitignore_ignores_data(root: Path | str) -> str:
+    """确保项目 .gitignore 忽略 .context-guard/，避免任务文本被误提交。
+
+    只增不删、幂等：已忽略则原样保留（返回 already-ignored）；有 .gitignore 但
+    缺条目时在末尾追加（updated）；没有 .gitignore 时创建最小文件（created）。
+    任何写入失败都不阻塞 init，返回 "skipped: <原因>" 由调用方提示。
+    """
+    gitignore = Path(root) / GITIGNORE_NAME
+    ignored_forms = {DATA_IGNORE_ENTRY, DATA_IGNORE_ENTRY.rstrip("/")}
+    try:
+        if gitignore.exists():
+            existing = gitignore.read_text(encoding="utf-8", errors="replace")
+            if any(line.strip() in ignored_forms for line in existing.splitlines()):
+                return "already-ignored"
+            prefix = "" if (not existing or existing.endswith("\n")) else "\n"
+            with gitignore.open("a", encoding="utf-8", newline="\n") as handle:
+                handle.write(f"{prefix}\n{_GITIGNORE_NOTE}\n{DATA_IGNORE_ENTRY}\n")
+            return "updated"
+        gitignore.write_text(f"{_GITIGNORE_NOTE}\n{DATA_IGNORE_ENTRY}\n", encoding="utf-8")
+        return "created"
+    except OSError as exc:
+        return f"skipped: {exc}"
+
+
+def init_project(root: Path | str | None = None, name: str | None = None, outcome: dict | None = None) -> dict:
     paths = project_paths(root)
     if not paths.root.exists() or not paths.root.is_dir():
         raise GuardError(f"项目目录不存在: {paths.root}")
@@ -98,7 +125,12 @@ def init_project(root: Path | str | None = None, name: str | None = None) -> dic
     paths.data.mkdir(parents=True)
     _atomic_write_json(paths.state, state)
     atomic_write(paths.notebook, f"# 记忆回廊（Context Guard Lite 2.0）Notebook\n\n项目：{project_name}\n\n")
-    append_event(paths, "contract.init", {"project": project_name})
+    # 隐私边界：账本含任务文本，默认必须被 git 忽略（README 承诺的行为）。
+    # 失败不阻塞初始化，结果进事件日志与 CLI 提示（outcome 出参模式同 read_events.malformed）。
+    gitignore_result = ensure_gitignore_ignores_data(paths.root)
+    if outcome is not None:
+        outcome["gitignore"] = gitignore_result
+    append_event(paths, "contract.init", {"project": project_name, "gitignore": gitignore_result})
     append_notebook(paths, "初始化", [f"项目：{project_name}", "保护状态：开启"])
     return state
 
@@ -109,7 +141,16 @@ def load_state(paths: ProjectPaths) -> dict:
         state = json.loads(paths.state.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise GuardError(f"无法读取状态文件，请保留现场后检查 {paths.state}: {exc}") from exc
-    if not isinstance(state, dict) or state.get("schema_version") != SCHEMA_VERSION:
+    if not isinstance(state, dict):
+        raise GuardError(f"状态文件不是 JSON 对象: {paths.state}")
+    version = state.get("schema_version")
+    if version != SCHEMA_VERSION:
+        if isinstance(version, int) and version > SCHEMA_VERSION:
+            # 「数据更新、工具旧」不是「数据损坏」：给出可执行的出路而不是含糊报错。
+            raise GuardError(
+                f"状态文件由更新版本的 memory-corridor 写入（schema v{version} > 本工具 v{SCHEMA_VERSION}），"
+                f"请先升级本工具再操作，不要手工改写: {paths.state}"
+            )
         raise GuardError(f"不支持的状态版本或状态损坏: {paths.state}")
     for key in ("project", "contract", "requirements", "evidence", "notes"):
         if key not in state:

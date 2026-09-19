@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from .contract import GuardError, ProjectPaths, append_event, append_notebook, load_state, utc_now
+from .contract import GuardError, ProjectPaths, append_event, append_notebook, utc_now
 from .locking import state_transaction
 
 KINDS = {"must", "avoid", "acceptance"}
@@ -89,17 +89,17 @@ def mark_done(paths: ProjectPaths, requirement_id: str) -> tuple[dict, bool]:
     """把 requirement 标记为 done，并返回 (requirement, 是否已满足门禁证据条件)。
 
     门禁语义由 check_gate 定义，本函数只做同等判定用于提示，不产生任何 evidence。
+    状态更新与证据判定放在同一把锁内完成：事务外重读可能读到其他进程的中间状态，
+    导致「已满足/未满足」提示与账本真实内容不一致。
     """
-    requirement = update_requirement(paths, requirement_id, status="done")
-    state = load_state(paths)
-    matching = [
-        item
-        for item in state["evidence"]
-        if item.get("requirement_id", "").upper() == requirement["id"].upper()
-        and item.get("requirement_revision") == requirement.get("revision", 1)
-    ]
-    latest = matching[-1] if matching else None
-    satisfied = latest is not None and latest.get("result") == "success"
+    from .evidence import latest_matching_evidence  # 函数内导入，避免 requirements ↔ evidence 循环
+
+    with state_transaction(paths) as state:
+        requirement, revision_changed = _apply_requirement_update(state, requirement_id, text=None, kind=None, status="done")
+        latest = latest_matching_evidence(state, requirement)
+        satisfied = latest is not None and latest.get("result") == "success"
+        requirement = json.loads(json.dumps(requirement))  # 快照，避免调用方改到锁外状态
+    _log_requirement_update(paths, requirement, revision_changed, None)
     return requirement, satisfied
 
 def update_requirement(

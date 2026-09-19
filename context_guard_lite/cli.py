@@ -145,6 +145,21 @@ def _print_json(value: object) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2))
 
 
+def _recovery_stale(state: dict, recovery_generated_at: str | None) -> bool | None:
+    """恢复包是否已过期：state 在 recovery.md 生成之后又发生了变化。
+
+    None 表示无法判断（没有恢复包或时间戳不可解析），不误报。
+    """
+    if not recovery_generated_at:
+        return None
+    try:
+        generated_at = datetime.fromisoformat(recovery_generated_at)
+        updated_at = datetime.fromisoformat(str(state.get("updated_at", "")).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return updated_at > generated_at
+
+
 def _cmd_status(paths, as_json: bool) -> int:
     state = load_state(paths)
     gate = check_gate(paths)
@@ -153,6 +168,7 @@ def _cmd_status(paths, as_json: bool) -> int:
         recovery_generated_at = datetime.fromtimestamp(
             paths.recovery.stat().st_mtime, tz=UTC
         ).isoformat(timespec="seconds").replace("+00:00", "Z")
+    recovery_stale = _recovery_stale(state, recovery_generated_at)
     result = {
         "project": state["project"],
         "enabled": state["contract"].get("enabled", False),
@@ -161,6 +177,7 @@ def _cmd_status(paths, as_json: bool) -> int:
         "notes": len(state["notes"]),
         "gate": gate,
         "recovery_generated_at": recovery_generated_at,
+        "recovery_stale": recovery_stale,
         "files": {
             "state": str(paths.state),
             "notebook": str(paths.notebook),
@@ -176,7 +193,8 @@ def _cmd_status(paths, as_json: bool) -> int:
         print(f"Evidence：{result['evidence']}；笔记：{result['notes']}")
         print(f"Gate：{gate['status']} — {gate['summary']}")
         if recovery_generated_at:
-            print(f"恢复包：已生成（{recovery_generated_at}）")
+            stale_hint = "；已过期（state 在生成后有变化，建议重新生成）" if recovery_stale else ""
+            print(f"恢复包：已生成（{recovery_generated_at}）{stale_hint}")
         else:
             print("恢复包：未生成（运行 recovery packet，或等待 PreCompact 自动刷新）")
         print(f"旁记事本：{paths.notebook}")
@@ -585,9 +603,20 @@ def main(argv: list[str] | None = None) -> int:
     paths = project_paths(args.root)
     try:
         if args.top_command == "init":
-            state = init_project(paths.root, args.name)
+            outcome: dict = {}
+            state = init_project(paths.root, args.name, outcome=outcome)
             print(f"已初始化：{paths.data}")
             print(f"项目：{state['project']['name']}；保护：开启")
+            gitignore_result = outcome.get("gitignore")
+            if gitignore_result == "created":
+                print("已创建 .gitignore 并忽略 .context-guard/，任务文本不会被误提交。")
+            elif gitignore_result == "updated":
+                print("已在现有 .gitignore 追加 .context-guard/，任务文本不会被误提交。")
+            elif gitignore_result == "already-ignored":
+                print(".gitignore 已忽略 .context-guard/，未做改动。")
+            elif isinstance(gitignore_result, str) and gitignore_result.startswith("skipped:"):
+                print(f"警告：未能更新 .gitignore（{gitignore_result.split(':', 1)[1].strip()}），"
+                      "请手动忽略 .context-guard/，否则任务文本可能被误提交。", file=sys.stderr)
             return 0
         if args.top_command == "on":
             set_enabled(paths, True)

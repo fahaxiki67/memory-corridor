@@ -9,11 +9,25 @@ from pathlib import Path
 
 import context_guard_lite
 from context_guard_lite.cli import main
-from context_guard_lite.contract import GuardError, add_note, init_project, load_state, project_paths, read_events
+from context_guard_lite.contract import (
+    GuardError,
+    add_note,
+    ensure_gitignore_ignores_data,
+    init_project,
+    load_state,
+    project_paths,
+    read_events,
+)
 from context_guard_lite.evidence import add_evidence
 from context_guard_lite.gate import check_gate
 from context_guard_lite.recovery import build_packet, write_packet
-from context_guard_lite.requirements import KINDS, STATUSES, add_requirement, update_requirement
+from context_guard_lite.requirements import (
+    KINDS,
+    STATUSES,
+    add_requirement,
+    mark_done,
+    update_requirement,
+)
 
 
 class ContextGuardLiteTests(unittest.TestCase):
@@ -462,6 +476,177 @@ class LedgerQueryTests(unittest.TestCase):
             self.assertEqual(main(["--root", str(self.root), "recovery", "packet", "--max-done", "3"]), 0)
         completed_three = three.getvalue().split("## 已完成")[1].split("## 最近 evidence")[0]
         self.assertEqual(completed_three.count("[x]"), 3)
+
+
+class PrivacyBoundaryTests(unittest.TestCase):
+    """隐私边界（v2.10.0）：init 必须确保项目 .gitignore 忽略 .context-guard/，任务文本不入库。"""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _init_events(self) -> list[dict]:
+        events_file = project_paths(self.root).events
+        return [json.loads(line) for line in events_file.read_text(encoding="utf-8").splitlines()]
+
+    def test_init_creates_gitignore_when_absent(self) -> None:
+        outcome: dict = {}
+        init_project(self.root, "fresh-project", outcome=outcome)
+        gitignore = self.root / ".gitignore"
+        self.assertTrue(gitignore.exists())
+        self.assertIn(".context-guard/", gitignore.read_text(encoding="utf-8"))
+        self.assertEqual(outcome["gitignore"], "created")
+        self.assertEqual(self._init_events()[0]["gitignore"], "created")
+
+    def test_init_appends_entry_to_existing_gitignore_and_keeps_user_content(self) -> None:
+        # 用户已有 .gitignore（末尾无换行也要处理）：只追加，不改原有内容
+        (self.root / ".gitignore").write_text("build/", encoding="utf-8")
+        outcome: dict = {}
+        init_project(self.root, "existing-gitignore", outcome=outcome)
+        content = (self.root / ".gitignore").read_text(encoding="utf-8")
+        self.assertIn("build/", content)
+        self.assertIn(".context-guard/", content)
+        self.assertEqual(outcome["gitignore"], "updated")
+
+    def test_init_is_idempotent_when_already_ignored(self) -> None:
+        original = "# my own gitignore\n.context-guard/\n"
+        (self.root / ".gitignore").write_text(original, encoding="utf-8")
+        outcome: dict = {}
+        init_project(self.root, "already-ignored", outcome=outcome)
+        self.assertEqual((self.root / ".gitignore").read_text(encoding="utf-8"), original)
+        self.assertEqual(outcome["gitignore"], "already-ignored")
+
+    def test_gitignore_helper_accepts_entry_without_trailing_slash(self) -> None:
+        (self.root / ".gitignore").write_text(".context-guard\n", encoding="utf-8")
+        self.assertEqual(ensure_gitignore_ignores_data(self.root), "already-ignored")
+
+    def test_init_survives_unwritable_gitignore(self) -> None:
+        # .gitignore 被目录占位导致写入失败：init 不被阻塞，事件日志留痕 skipped
+        (self.root / ".gitignore").mkdir()
+        outcome: dict = {}
+        state = init_project(self.root, "gitignore-blocked", outcome=outcome)
+        self.assertTrue(state["contract"]["enabled"])
+        self.assertTrue(outcome["gitignore"].startswith("skipped:"))
+        self.assertTrue(self._init_events()[0]["gitignore"].startswith("skipped:"))
+
+
+class GateExplainabilityTests(unittest.TestCase):
+    """可解释性（v2.10.0）：门禁必须解释「为什么记录过 evidence 还阻塞」。"""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        init_project(self.root, "explain-project")
+        self.paths = project_paths(self.root)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_gate_explains_stale_revision_evidence(self) -> None:
+        requirement = add_requirement(self.paths, "口径 v1")
+        add_evidence(self.paths, requirement["id"], "v1 验证通过", "success")
+        update_requirement(self.paths, requirement["id"], text="口径 v2（证据被版本升级作废）")
+        result = check_gate(self.paths)
+        self.assertFalse(result["ok"])
+        reason = result["blocking"][0]["reasons"][-1]
+        # 稳定前缀：hook 阻塞输出与既有断言依赖这句原文
+        self.assertIn("没有匹配当前版本的 evidence", reason)
+        self.assertIn("v2", reason)  # 当前版本号
+        self.assertIn("旧版本证据", reason)  # 点明历史证据存在且不自动适用
+        self.assertIn("E001@v1", reason)  # 指出最新一条旧证据
+
+    def test_gate_plain_message_when_no_evidence_at_all(self) -> None:
+        add_requirement(self.paths, "从未记录证据")
+        reason = check_gate(self.paths)["blocking"][0]["reasons"][-1]
+        self.assertEqual(reason, "没有匹配当前版本的 evidence")
+
+
+class DataLifecycleTests(unittest.TestCase):
+    """数据生命周期（v2.10.0）：recovery.md 过期必须在 status 中显式可见。"""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        init_project(self.root, "lifecycle-project")
+        self.paths = project_paths(self.root)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _status_json(self) -> dict:
+        import contextlib as _contextlib
+        import io as _io
+
+        with _contextlib.redirect_stdout(_io.StringIO()) as out:
+            self.assertEqual(main(["--root", str(self.root), "status", "--json"]), 0)
+        return json.loads(out.getvalue())
+
+    def test_status_marks_recovery_stale_after_state_changes(self) -> None:
+        write_packet(self.paths)
+        self.assertIs(self._status_json()["recovery_stale"], False)
+
+        # 把恢复包文件时间回拨，模拟「生成后账本又变了」的确定性场景
+        import os
+        import time
+
+        old = time.time() - 30
+        os.utime(self.paths.recovery, (old, old))
+        add_requirement(self.paths, "恢复包生成之后新增的要求")
+
+        parsed = self._status_json()
+        self.assertIs(parsed["recovery_stale"], True)
+
+        import contextlib as _contextlib
+        import io as _io
+
+        with _contextlib.redirect_stdout(_io.StringIO()) as out:
+            self.assertEqual(main(["--root", str(self.root), "status"]), 0)
+        self.assertIn("已过期", out.getvalue())
+
+    def test_status_stale_unknown_when_no_recovery_file(self) -> None:
+        self.assertIsNone(self._status_json()["recovery_stale"])
+
+
+class BackwardCompatibilityTests(unittest.TestCase):
+    """向后兼容（v2.10.0）：新版账本格式给出「升级」出路；绑定规则三处消费一致。"""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        init_project(self.root, "compat-project")
+        self.paths = project_paths(self.root)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_newer_schema_version_gets_upgrade_hint_not_corrupt_claim(self) -> None:
+        state = json.loads(self.paths.state.read_text(encoding="utf-8"))
+        state["schema_version"] = 99
+        self.paths.state.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        with self.assertRaises(GuardError) as ctx:
+            load_state(self.paths)
+        message = str(ctx.exception)
+        self.assertIn("升级", message)
+        self.assertIn("v99", message)
+
+    def test_binding_rule_consistent_across_gate_recovery_and_done(self) -> None:
+        # 检索规则单一化后，gate / recovery packet / done 提示三个消费者结论一致
+        requirement = add_requirement(self.paths, "口径 v1")
+        add_evidence(self.paths, requirement["id"], "v1 验证通过", "success")
+        update_requirement(self.paths, requirement["id"], status="done")
+
+        self.assertTrue(check_gate(self.paths)["ok"])
+        self.assertIn("[x] R001", build_packet(self.paths))
+        _, satisfied = mark_done(self.paths, requirement["id"])
+        self.assertTrue(satisfied)
+
+        update_requirement(self.paths, requirement["id"], text="口径 v2")
+        self.assertFalse(check_gate(self.paths)["ok"])
+        _, satisfied_after_bump = mark_done(self.paths, requirement["id"])
+        self.assertFalse(satisfied_after_bump)
 
 
 if __name__ == "__main__":

@@ -29,7 +29,7 @@ Lite 2.0 是独立 CLI，不直接接管 Codex 的 compact/resume，也不声称
 └── recovery.md      # 最近一次恢复包
 ```
 
-默认 `.gitignore` 忽略 `.context-guard/`，避免把任务文本或内部记录误提交。若确实需要版本化旁记事本，删除 `.gitignore` 中对应行后再提交。
+`init` 会确保项目 `.gitignore` 忽略 `.context-guard/`，避免把任务文本或内部记录误提交：已忽略则不改动；有 `.gitignore` 但缺条目则在末尾追加，已有内容原样保留；没有 `.gitignore` 则创建最小文件。写入失败只警告不阻塞，结果记入事件日志。若确实需要版本化旁记事本，删除 `.gitignore` 中对应行后再提交。
 
 状态写入采用同目录临时文件加替换，避免进程中断时半写入 `state.json`。文本统一 UTF-8；路径使用 Python `pathlib`，不依赖 bash、PowerShell 特有语法或系统级服务，因此 Windows 和 macOS 使用同一份项目目录结构。
 
@@ -167,7 +167,7 @@ context-guard gate check --json
 context-guard gate check --all
 ```
 
-阻塞项很多时，文本输出默认只列前 20 条并汇总提示；`--all` 查看全部，`--json` 输出全量结构化结果供程序读取。`status` 同样支持 `--json`，并会显示恢复包是否已生成及其生成时间。
+阻塞项很多时，文本输出默认只列前 20 条并汇总提示；`--all` 查看全部，`--json` 输出全量结构化结果供程序读取。`status` 同样支持 `--json`，并会显示恢复包是否已生成及其生成时间；账本在恢复包生成后又有变化时，`status` 会把恢复包标记为已过期（`--json` 的 `recovery_stale` 字段），提示重新生成。
 
 `recovery packet` 会输出并保存一份短恢复包，包含 active requirements、每项当前 evidence、最近 evidence、旁记事本尾部和完成规则。它是给人或 AI 随时调取的“工作记忆”，不是完整聊天记录。
 
@@ -183,6 +183,8 @@ context-guard gate check --all
 ```
 
 若最新 evidence 是 `failed` 或 `unknown`，即使更早有 `success`，也会阻塞，直到补充新的成功验证。
+
+阻塞原因自带解释：requirement 文本或类型变更推高 revision 后，旧 evidence 不会静默失效——`gate check` 会指明当前版本与历史证据（形如 `没有匹配当前版本的 evidence（当前 v2；存在 1 条旧版本证据，最新 E001@v1，旧证据不自动适用）`），Stop hook 阻塞清单同样继承这一解释。
 
 ## 示例
 

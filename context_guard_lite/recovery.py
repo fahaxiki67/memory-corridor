@@ -3,18 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from .contract import ProjectPaths, atomic_write, load_state, notebook_tail
+from .evidence import latest_matching_evidence
 from .gate import check_gate
-
-
-def _latest_evidence(state: dict, requirement: dict) -> dict | None:
-    matching = [
-        item
-        for item in state["evidence"]
-        if item.get("requirement_id", "").upper() == requirement["id"].upper()
-        and item.get("requirement_revision") == requirement.get("revision", 1)
-    ]
-    return matching[-1] if matching else None
-
 
 DEFAULT_MAX_DONE_REQUIREMENTS = 20
 
@@ -135,7 +125,7 @@ def build_packet(
     if not pending:
         lines.append("- （暂无待办 requirement）")
     for requirement in pending:
-        evidence = _latest_evidence(state, requirement)
+        evidence = latest_matching_evidence(state, requirement)
         marker = "x" if requirement.get("status") == "done" else " "
         lines.append(
             f"- [{marker}] {requirement['id']} [{requirement['kind']}] "

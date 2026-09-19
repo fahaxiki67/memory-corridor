@@ -5,6 +5,28 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.10.0] - 2026-09-20
+
+### 新增
+
+- **隐私边界：`init` 确保项目 `.gitignore` 忽略 `.context-guard/`**。README 早已承诺"默认 `.gitignore` 忽略账本目录"，但此前只有本仓库自身（dogfood）成立，用户项目里 `init` 并不写 `.gitignore`，任务文本存在被误提交的真实风险。现在 `init` 幂等地补齐这一保护：已忽略则不改动；有 `.gitignore` 但缺条目则在末尾追加（用户已有内容原样保留）；没有 `.gitignore` 则创建最小文件。写入失败（如被目录占位）只警告不阻塞初始化，结果记入 `contract.init` 事件供审计。
+- **完成门禁可解释性**：requirement 文本/类型变更推高 revision 后，旧 evidence 不再"静默失效"——阻塞原因现在指明当前版本、历史证据条数与最新一条（形如 `没有匹配当前版本的 evidence（当前 v2；存在 1 条旧版本证据，最新 E001@v1，旧证据不自动适用）`），Stop hook 的阻塞清单自动继承该解释。稳定前缀不变，`--json` 结构与既有消费者兼容。
+- **数据生命周期：`status` 标记恢复包过期**。账本在 `recovery.md` 生成之后又有变化时，文本输出提示"已过期"，`status --json` 新增 `recovery_stale` 字段（无恢复包或时间戳不可解析时为 `null`，不误报）。SessionStart 注入不受影响（始终从最新 state 现场重建）。
+- **向后兼容：schema 版本前向拒绝给出升级出路**。`load_state` 遇到由更新版本工具写入的账本（schema version 更大）时，明确提示"请先升级本工具"，不再与"状态文件损坏"混为一谈。
+
+### 变更
+
+- **evidence ↔ requirement 绑定规则收敛为单一实现**（`evidence.matching_evidence` / `latest_matching_evidence`）：门禁判定、恢复包、`requirements done` 提示三处此前各自手写匹配条件，现共用同一条检索规则（ID 大小写不敏感 + revision 精确相等），杜绝多处实现漂移。
+- **`requirements done` 的证据判定移入状态锁内**：此前在事务提交后于锁外重读 state 再判定"是否已满足门禁"，并发场景下可能读到其他进程的中间状态；现在与状态更新同一事务完成。
+
+### 测试
+
+- 新增 11 项测试（gitignore 幂等/追加/只增不删/写失败降级 5 项、门禁旧证据解释 2 项、恢复包过期 2 项、schema 升级提示与三消费者绑定一致性 2 项），总测试 132 项。
+
+### Verification boundary
+
+- PR CI 覆盖 Ubuntu、macOS、Windows 与 Python 3.11–3.14。`init` 的 .gitignore 行为在 Windows 真机（NTFS）验证；POSIX 语义无平台分支代码。状态 schema 未变更（仍为 v1），旧账本零迁移可用。
+
 ## [2.9.4] - 2026-09-18
 
 ### Changed

@@ -1,6 +1,19 @@
 from __future__ import annotations
 
 from .contract import ProjectPaths, load_state
+from .evidence import matching_evidence
+
+
+def _stale_evidence(state: dict, requirement: dict) -> list[dict]:
+    """绑定到该 requirement 但不属于当前 revision 的历史 evidence（revision 只增不减）。"""
+    requirement_id = str(requirement.get("id", "")).upper()
+    revision = requirement.get("revision", 1)
+    return [
+        item
+        for item in state["evidence"]
+        if str(item.get("requirement_id", "")).upper() == requirement_id
+        and item.get("requirement_revision") != revision
+    ]
 
 
 def check_gate(paths: ProjectPaths) -> dict:
@@ -40,18 +53,24 @@ def check_gate(paths: ProjectPaths) -> dict:
     blocking = []
     satisfied = []
     for requirement in active:
-        matching = [
-            item
-            for item in state["evidence"]
-            if item.get("requirement_id", "").upper() == requirement["id"].upper()
-            and item.get("requirement_revision") == requirement.get("revision", 1)
-        ]
+        matching = matching_evidence(state, requirement)
         latest = matching[-1] if matching else None
         reasons = []
         if requirement.get("status") != "done":
             reasons.append(f"状态为 {requirement.get('status')}，不是 done")
         if latest is None:
-            reasons.append("没有匹配当前版本的 evidence")
+            stale = _stale_evidence(state, requirement)
+            if stale:
+                # 可解释性：说清「为什么有过 evidence 还阻塞」——文本/类型变更推高了
+                # revision，旧证据绑定旧版本，不会自动适用；并给出补证命令。
+                last = stale[-1]
+                reasons.append(
+                    f"没有匹配当前版本的 evidence（当前 v{requirement.get('revision', 1)}；"
+                    f"存在 {len(stale)} 条旧版本证据，最新 {last.get('id')}@v{last.get('requirement_revision')}，"
+                    "旧证据不自动适用）"
+                )
+            else:
+                reasons.append("没有匹配当前版本的 evidence")
         elif latest.get("result") != "success":
             reasons.append(f"最新 evidence {latest.get('id')} 结果为 {latest.get('result')}")
         if reasons:
