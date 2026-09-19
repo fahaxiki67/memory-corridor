@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .constitution import render_section
 from .contract import ProjectPaths, atomic_write, load_state, notebook_tail
 from .evidence import latest_matching_evidence
 from .gate import check_gate
@@ -169,6 +170,11 @@ def build_packet(
         lines.append("- 下一步：处理上面的阻塞项，再重新运行 `context-guard gate check`。")
     else:
         lines.append("- 下一步：可以向用户报告完成，但仍应保留人工判断边界。")
+    # 章程约束区块（只展示不判定）：未设置章程时不出现，输出形状保持不变；
+    # 与 status 输出、Stop hook 阻塞清单共用同一渲染实现。
+    constitution_lines = render_section(paths)
+    if constitution_lines:
+        lines.extend(["", *constitution_lines])
     return _fit_packet("\n".join(lines) + "\n")
 
 

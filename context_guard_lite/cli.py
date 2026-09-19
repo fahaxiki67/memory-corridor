@@ -8,6 +8,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from . import __version__
+from .constitution import (
+    add_constraint,
+    clear_constitution,
+    constitution_path,
+    constitution_summary,
+    load_constraints,
+    render_section,
+)
 from .contract import GuardError, add_note, init_project, load_state, project_paths, read_events, set_enabled
 from .evidence import add_evidence, list_evidence
 from .gate import check_gate
@@ -99,6 +107,15 @@ def _parser() -> argparse.ArgumentParser:
     gate_check.add_argument("--json", action="store_true", dest="as_json")
     gate_check.add_argument("--all", action="store_true", dest="show_all", help="列出全部阻塞项（默认只列前 20 条）")
 
+    constitution = commands.add_parser(
+        "constitution", help="管理项目章程（项目级约束清单，随门禁输出展示，只展示不判定）"
+    )
+    constitution_commands = constitution.add_subparsers(dest="constitution_command", required=True)
+    con_set = constitution_commands.add_parser("set", help="追加一条约束（一行一条；同一约束重复添加不产生重复行）")
+    con_set.add_argument("text")
+    constitution_commands.add_parser("show", help="显示章程约束（未设置时明确提示）")
+    constitution_commands.add_parser("clear", help="清除章程（删除 constitution.md；未设置时幂等成功）")
+
     note = commands.add_parser("note", aliases=["notebook"], help="向旁记事本追加记录")
     note_commands = note.add_subparsers(dest="note_command", required=True)
     note_add = note_commands.add_parser("add", help="新增经验、决定或普通笔记")
@@ -178,6 +195,8 @@ def _cmd_status(paths, as_json: bool) -> int:
         "gate": gate,
         "recovery_generated_at": recovery_generated_at,
         "recovery_stale": recovery_stale,
+        # 未设置章程时为 None（缺失≠0，与「设置了但 0 条」显式区分）。
+        "constitution": constitution_summary(paths),
         "files": {
             "state": str(paths.state),
             "notebook": str(paths.notebook),
@@ -198,7 +217,48 @@ def _cmd_status(paths, as_json: bool) -> int:
         else:
             print("恢复包：未生成（运行 recovery packet，或等待 PreCompact 自动刷新）")
         print(f"旁记事本：{paths.notebook}")
+        # 章程约束区块（只展示不判定）：未设置时不出现；与恢复包、Stop hook
+        # 阻塞清单共用同一渲染实现，保证各处内容一致。
+        constitution_lines = render_section(paths)
+        if constitution_lines:
+            print()
+            for line in constitution_lines:
+                print(line)
     return 0
+
+
+def _cmd_constitution(paths, args) -> int:
+    if args.constitution_command == "set":
+        result = add_constraint(paths, args.text)
+        if result["status"] == "exists":
+            print(f"约束已存在，未重复添加（当前 {result['count']} 条）：{result['text']}")
+        else:
+            print(f"已写入章程（当前 {result['count']} 条）：{result['text']}")
+        print(f"章程文件：{constitution_path(paths)}（可直接手工编辑，一行一条；空行与注释行不计入）")
+        return 0
+    if args.constitution_command == "show":
+        if not paths.constitution.exists():
+            # 未设置 ≠ 空清单：显式说明，并给出可执行的下一步。
+            print("未设置章程。")
+            print('使用 memory-corridor constitution set "约束文本" 逐条添加；')
+            print(f"设置后约束将随恢复包、status 输出与 Stop hook 阻塞清单展示（文件：{constitution_path(paths)}）。")
+            return 0
+        constraints = load_constraints(paths)
+        if not constraints:
+            print("章程文件存在，但没有有效约束行（空行与注释行不计入）。")
+            return 0
+        print(f"章程约束（{len(constraints)} 条，只展示不判定）：")
+        for index, item in enumerate(constraints, 1):
+            print(f"{index}. {item}")
+        print(f"文件：{constitution_path(paths)}（可直接手工编辑）")
+        return 0
+    if args.constitution_command == "clear":
+        if clear_constitution(paths):
+            print(f"已清除章程（删除 {constitution_path(paths)}）。")
+        else:
+            print("未设置章程，无需清除。")
+        return 0
+    return 2
 
 
 def _cmd_requirements(paths, args) -> int:
@@ -636,6 +696,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_recovery(paths, args)
         if args.top_command == "gate":
             return _cmd_gate(paths, args)
+        if args.top_command == "constitution":
+            return _cmd_constitution(paths, args)
         if args.top_command in {"note", "notebook"}:
             return _cmd_note(paths, args)
         if args.top_command == "events":

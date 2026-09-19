@@ -21,6 +21,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..constitution import render_section
 from ..contract import GuardError, ProjectPaths, append_event, project_paths
 from ..gate import check_gate
 from ..recovery import build_packet, write_packet
@@ -215,8 +216,14 @@ def _handle_session_start(paths: ProjectPaths, payload: dict, platform: str = "c
     )
 
 
-def _stop_outcome_for_gate(gate: dict, stop_hook_active: bool) -> HookOutcome:
-    """按门禁结果决定 Stop 输出；纯函数，事件记录由 _handle_stop 负责。"""
+def _stop_outcome_for_gate(
+    gate: dict, stop_hook_active: bool, paths: ProjectPaths | None = None
+) -> HookOutcome:
+    """按门禁结果决定 Stop 输出；纯函数，事件记录由 _handle_stop 负责。
+
+    ``paths`` 传入时，阻塞清单末尾继承「章程约束」区块（只展示不判定，
+    与恢复包/status 同源渲染）；未设置章程时区块不出现。
+    """
     if gate["status"] == "disabled":
         return HookOutcome(
             output={"continue": True},
@@ -237,7 +244,7 @@ def _stop_outcome_for_gate(gate: dict, stop_hook_active: bool) -> HookOutcome:
         )
     if gate["ok"]:
         return HookOutcome(output={"continue": True})
-    blockers = _render_blockers(gate)
+    blockers = _render_blockers(gate, paths)
     if stop_hook_active:
         ids = ", ".join(item["requirement_id"] for item in gate["blocking"])
         return HookOutcome(
@@ -305,7 +312,7 @@ def _handle_stop(paths: ProjectPaths, payload: dict, platform: str = "codex") ->
             },
             diagnostics=(f"Memory Corridor: 状态无法读取：{exc}",),
         )
-    outcome = _stop_outcome_for_gate(gate, stop_hook_active)
+    outcome = _stop_outcome_for_gate(gate, stop_hook_active, paths)
     _record_hook_event(
         paths,
         "hook.stop",
@@ -320,7 +327,7 @@ def _handle_stop(paths: ProjectPaths, payload: dict, platform: str = "codex") ->
     return outcome
 
 
-def _render_blockers(gate: dict) -> str:
+def _render_blockers(gate: dict, paths: ProjectPaths | None = None) -> str:
     lines: list[str] = []
     blocking = gate["blocking"]
     for item in blocking[:MAX_BLOCKERS_IN_REASON]:
@@ -335,6 +342,13 @@ def _render_blockers(gate: dict) -> str:
             f"… and {len(blocking) - MAX_BLOCKERS_IN_REASON} more blocked requirements not listed; "
             "run `memory-corridor gate check` for the full list."
         )
+    if paths is not None:
+        # 章程约束区块与恢复包/status 同源渲染（只展示不判定）；
+        # render_section 不抛异常，章程存在性/可读性绝不影响门禁决策本身。
+        constitution_lines = render_section(paths)
+        if constitution_lines:
+            lines.append("")
+            lines.extend(constitution_lines)
     return "\n".join(lines)
 
 

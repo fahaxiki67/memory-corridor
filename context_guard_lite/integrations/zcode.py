@@ -208,12 +208,16 @@ def _handle_session_start(paths: ProjectPaths, payload: dict) -> HookOutcome:
     )
 
 
-def _stop_outcome_for_gate(gate: dict, stop_hook_active: bool) -> HookOutcome:
+def _stop_outcome_for_gate(
+    gate: dict, stop_hook_active: bool, paths: ProjectPaths | None = None
+) -> HookOutcome:
     """按门禁结果决定 Stop 输出（ZCode 版）。
 
     放行场景输出为空（``output=None``）：ZCode 在 Stop 上把
     ``continue: true`` 解释为"请求续命"，因此绝不能照搬 Codex/Claude 的
     放行输出。阻塞只在 ``stop_hook_active`` 为假时发生一次。
+    ``paths`` 传入时，阻塞清单末尾继承「章程约束」区块（只展示不判定，
+    与恢复包/status 同源渲染）；未设置章程时区块不出现。
     """
     if gate["status"] in ("disabled", "idle") or gate["ok"]:
         return HookOutcome(output=None)
@@ -230,7 +234,7 @@ def _stop_outcome_for_gate(gate: dict, stop_hook_active: bool) -> HookOutcome:
         )
     reason = (
         "不能结束。Memory Corridor 完成门禁未通过：\n\n"
-        f"{_render_blockers(gate)}\n\n"
+        f"{_render_blockers(gate, paths)}\n\n"
         "请继续处理这些 requirement，取得真实验证证据后再尝试结束。"
     )
     return HookOutcome(output={"decision": "block", "reason": reason})
@@ -277,7 +281,7 @@ def _handle_stop(paths: ProjectPaths, payload: dict) -> HookOutcome:
             },
             diagnostics=(f"Memory Corridor: 状态无法读取：{exc}",),
         )
-    outcome = _stop_outcome_for_gate(gate, stop_hook_active)
+    outcome = _stop_outcome_for_gate(gate, stop_hook_active, paths)
     _record_hook_event(
         paths,
         "hook.stop",

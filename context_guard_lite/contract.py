@@ -9,6 +9,8 @@ from pathlib import Path
 
 APP_DIR_NAME = ".context-guard"
 SCHEMA_VERSION = 1
+# 章程文件（constitution 模块消费）；不是 state 的一部分，不参与 schema 与迁移。
+CONSTITUTION_FILE_NAME = "constitution.md"
 GITIGNORE_NAME = ".gitignore"
 DATA_IGNORE_ENTRY = ".context-guard/"
 _GITIGNORE_NOTE = "# The local ledger can contain task text and should not be committed by accident."
@@ -26,6 +28,7 @@ class ProjectPaths:
     events: Path
     notebook: Path
     recovery: Path
+    constitution: Path
 
 
 def project_paths(root: Path | str | None = None) -> ProjectPaths:
@@ -38,6 +41,7 @@ def project_paths(root: Path | str | None = None) -> ProjectPaths:
         events=data / "events.jsonl",
         notebook=data / "notebook.md",
         recovery=data / "recovery.md",
+        constitution=data / CONSTITUTION_FILE_NAME,
     )
 
 
