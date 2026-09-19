@@ -17,6 +17,25 @@ Lite 2.0 是独立 CLI，不直接接管 Codex 的 compact/resume，也不声称
 
 这正是“旁边有个记事本”的最小可靠版本。v2.2.0 起通过一层薄的 Codex Hook 适配把同样的动作接入了 Codex 的 compact/resume 与停止阶段（见下方“Codex 原生集成”）；核心账本保持独立，没有 Codex 也照常可用。
 
+## 项目章程
+
+「项目章程」是项目级、整个生命周期持续生效的约束清单（借鉴 spec-kit 等社区的 constitution 实践），存放为人可直接编辑的 `.context-guard/constitution.md`（UTF-8，一行一条约束）。它与 requirement 的分工：requirement 会完成、会被 superseded；章程在整个项目期间都应被遵守，且**不参与完成门禁的判定**。
+
+```text
+memory-corridor constitution set "不得修改数据库结构"
+memory-corridor constitution set "每次交付前全量测试必须通过"
+memory-corridor constitution show
+memory-corridor constitution clear
+```
+
+- `set` 逐条追加且幂等：同一约束重复添加不会产生重复行；文本中的换行折叠为单行；
+- `show` 未设置时明确提示「未设置章程」，不会输出一个空清单；
+- 文件是普通 Markdown，可直接手工编辑；工具读取时跳过空行与注释行（`#` 或 `<!--` 开头）；
+- `clear` 删除章程文件；未设置时执行也是幂等成功；
+- 章程独立于 `state.json`：不新增任何状态字段、无 schema 迁移，「有无章程」在每次输出时现场检查文件存在性。
+
+**只展示不判定**。章程存在时，恢复包与 `status` 输出末尾会追加「章程约束 N 条」区块列出全部约束，Stop hook 的阻塞清单同步携带该区块（三处同源渲染、内容一致）；某个行为是否违反章程由人与 AI 自行判断，工具不猜。这与「先说边界」一脉相承：门禁只校验账本上记录的验证证据，不假装能理解自然语言约束。章程文件不可读时，区块会显示显式占位说明，不静默、也不影响门禁。
+
 ## 目录结构
 
 运行 `init` 后，项目目录会出现：

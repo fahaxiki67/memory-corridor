@@ -5,6 +5,12 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 新增
+
+- **项目章程（constitution）：项目级不可违反约束清单随门禁输出展示**。新增 `constitution set / show / clear` 子命令，约束存入 `.context-guard/constitution.md`（人可直接编辑的 UTF-8 Markdown，一行一条；`set` 幂等追加，同一约束不产生重复行，换行折叠为单行；空行与注释行不计入）。设置章程后，恢复包与 `status` 输出末尾追加「章程约束 N 条」区块，Codex / Claude / ZCode 三个平台的 Stop hook 阻塞清单同步继承该区块（与恢复包、status 同源渲染、内容一致）。**只展示不判定**：章程是否被违反由人/AI 自行判断，工具不猜，门禁判定逻辑不变。章程独立于 `state.json`（无 schema 变更与迁移），「有无章程」在每次输出时现场检查文件存在性；未设置时 `show` 明确提示「未设置章程」，各输出不出现区块（`status --json` 的 `constitution` 字段为 `null`，与「设置了但 0 条」显式区分）；章程文件不可读时区块显示占位说明，不静默、不影响门禁。新增 13 项测试，总测试 145 项。
+
 ## [2.10.0] - 2026-09-20
 
 ### 新增
