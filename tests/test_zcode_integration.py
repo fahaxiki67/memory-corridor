@@ -16,9 +16,11 @@ import os
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
+from context_guard_lite import __version__
 from context_guard_lite.cli import main
 from context_guard_lite.contract import init_project, project_paths
 from context_guard_lite.evidence import add_evidence
@@ -380,6 +382,11 @@ class ZCodePluginFilesTests(unittest.TestCase):
         manifest = json.loads((REPO_ROOT / ".zcode-plugin" / "plugin.json").read_text(encoding="utf-8"))
         self.assertRegex(manifest["name"], r"^[a-z0-9][a-z0-9._-]{0,127}$")
         self.assertEqual(manifest["hooks"], "hooks")
+        # 版本三处同源（回归：插件清单停在 2.9.3 连漏两版、__init__.py 在 2.9.4
+        # 也曾漏改；zcode status 会把清单版本原样报告给用户）。
+        pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertEqual(pyproject["project"]["version"], __version__)
+        self.assertEqual(manifest["version"], __version__)
 
         hooks = json.loads((REPO_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
         # ZCode 仅支持 7 事件且无 PreCompact：本插件只注册 SessionStart 与 Stop。

@@ -447,7 +447,7 @@ macOS：
 python3.11 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-测试只使用标准库，覆盖初始化、旁记事本、门禁、revision 失效、恢复包和常见输入错误。CI 在 Ubuntu / macOS / Windows × Python 3.11–3.13 矩阵上运行同一套测试，并额外验证 `pip install .` 后两个命令行入口可用。
+测试只使用标准库，覆盖初始化、旁记事本、门禁、revision 失效、恢复包和常见输入错误。CI 在 Ubuntu / macOS / Windows × Python 3.11–3.14 矩阵上运行同一套测试，并额外验证 `pip install .` 后两个命令行入口可用。
 
 ## License
 

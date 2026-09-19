@@ -11,6 +11,11 @@
 
 - **项目章程（constitution）：项目级不可违反约束清单随门禁输出展示**。新增 `constitution set / show / clear` 子命令，约束存入 `.context-guard/constitution.md`（人可直接编辑的 UTF-8 Markdown，一行一条；`set` 幂等追加，同一约束不产生重复行，换行折叠为单行；空行与注释行不计入）。设置章程后，恢复包与 `status` 输出末尾追加「章程约束 N 条」区块，Codex / Claude / ZCode 三个平台的 Stop hook 阻塞清单同步继承该区块（与恢复包、status 同源渲染、内容一致）。**只展示不判定**：章程是否被违反由人/AI 自行判断，工具不猜，门禁判定逻辑不变。章程独立于 `state.json`（无 schema 变更与迁移），「有无章程」在每次输出时现场检查文件存在性；未设置时 `show` 明确提示「未设置章程」，各输出不出现区块（`status --json` 的 `constitution` 字段为 `null`，与「设置了但 0 条」显式区分）；章程文件不可读时区块显示占位说明，不静默、不影响门禁。新增 13 项测试，总测试 145 项。
 
+### 修复
+
+- **发布一致性：`.zcode-plugin/plugin.json` 版本同步到 2.10.0**。插件清单版本自 2.9.3 后未随发布更新（2.9.4、2.10.0 连续两版漏改；`__init__.py` 在 2.9.4 也曾漏改、事后单独补救），而 `zcode status` 会把清单版本原样报告给用户。插件分发文件的结构契约测试中加入回归检查：`pyproject.toml`、`context_guard_lite.__version__`、插件清单三处版本必须一致。
+- **文档与实际行为一致性修正**：README 测试小节的 CI 矩阵从过期的 Python 3.11–3.13 更正为 3.11–3.14（矩阵自 2.3.0 起含 3.14，以 `.github/workflows/ci.yml` 为准）；修复 CHANGELOG 2.3.1 / 2.4.0 / 2.5.0 / 2.6.0 四处标题行的复制粘贴损坏（重复标题拼接了 keepachangelog 链接与孤行）；`hooks/zcode_hook.py` 模块文档从 v2.9.1 之前的 `process` 型调用说明更正为现行 `command` 型（`python3 … || py -3 …` 双解释器回退）。
+
 ## [2.10.0] - 2026-09-20
 
 ### 新增
@@ -145,9 +150,6 @@
 
 - 新增 10 项 Claude 集成测试（配置管理对称套件 + hook 协议复用），总测试 77 项；Codex 侧 67 项回归无变化。
 
-## [2.6.0] - 2026-09-05(https://keepachangelog.com/zh-CN/1.1.0/)，
-版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
-
 ## [2.6.0] - 2026-09-05
 
 ### 新增
@@ -158,9 +160,6 @@
 ### 测试
 
 - 新增 2 项测试（done 糖的无证据警告与满足提示、revision 升级后要求补新证据），总测试 67 项。
-
-## [2.5.0] - 2026-09-05(https://keepachangelog.com/zh-CN/1.1.0/)，
-版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ## [2.5.0] - 2026-09-05
 
@@ -178,9 +177,6 @@
 
 - 新增 7 项测试（批量导入解析/BOM/管道/文件缺失、--max-done 折叠边界），总测试 65 项；全库通过 ruff 检查。
 
-## [2.4.0] - 2026-09-05(https://keepachangelog.com/zh-CN/1.1.0/)，
-版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
-
 ## [2.4.0] - 2026-09-05
 
 本版延续实验数据复查：events.jsonl 双进程并发追加（各 200 行，401/401 全部合法零丢失——追加日志比账本状态抗并发）、5000 条账本极限（gate 16ms / packet 36ms，性能无虞）、200 条阻塞项输出量化。
@@ -194,9 +190,6 @@
 ### 测试
 
 - 新增 3 项测试（gate check 截断与 --all/--json 全量、status 恢复包新鲜度、codex status --json），总测试 61 项。
-
-## [2.3.1] - 2026-09-05(https://keepachangelog.com/zh-CN/1.1.0/)，
-版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ## [2.3.1] - 2026-09-05
 
