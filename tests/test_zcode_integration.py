@@ -483,6 +483,26 @@ class ZCodePluginFilesTests(unittest.TestCase):
         self.assertEqual(parsed["platform"], "zcode")
         self.assertIn("protocol", parsed)
 
+    def test_cli_zcode_status_notice_matches_verified_protocol(self) -> None:
+        """文本通告必须与协议 JSON 的真机验收结论同口径，不得自相矛盾。
+
+        回归背景：Windows Stop 全链路已于 2026-09-12 真机验证（README、CHANGELOG
+        2.9.2/2.9.3、``protocol.stop_e2e_verified`` 三处一致），但
+        ``ZCODE_EXPERIMENTAL_NOTICE`` 仍停留在更早的「Windows 的 Stop 全链路……
+        待人工复核」，同一条 ``zcode status`` 命令的文本输出与 ``--json`` 输出
+        互相矛盾，会误导用户重做已完成的验证。
+        """
+        with contextlib.redirect_stdout(io.StringIO()) as fake_out:
+            self.assertEqual(main(["--root", str(self.root), "zcode", "status"]), 0)
+        text = fake_out.getvalue()
+        protocol = zcode_hook_status(REPO_ROOT)["protocol"]
+        if protocol["stop_e2e_verified"]:
+            self.assertNotIn("待人工复核", text)
+            self.assertIn("Windows", text)
+            self.assertIn("全链路", text)
+        else:
+            self.assertIn("待人工复核", text)
+
 
 if __name__ == "__main__":
     unittest.main()

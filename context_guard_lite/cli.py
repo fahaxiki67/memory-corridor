@@ -584,9 +584,9 @@ def _cmd_claude(paths, args) -> int:
 
 ZCODE_EXPERIMENTAL_NOTICE = (
     "状态：实验性（v2.9.0 引入，v2.9.1 起 hook 启动跨平台自动回退）。\n"
-    "真机验收：SessionStart 注入已在 macOS（2026-09-11）与 Windows（2026-09-12）\n"
-    "真实 ZCode CLI 验证；Stop 门禁已在 macOS 桌面客户端全链路验证（2026-09-12），\n"
-    "Windows 的 Stop 全链路与 24KB 截断行为待人工复核。\n"
+    "真机验收：macOS 与 Windows 的 SessionStart 注入与 Stop 门禁全链路\n"
+    "（block → 续命 → 防循环 allow → PASS allow）均已于 2026-09-11/12 验证；\n"
+    "仍待人工：marketplace GUI 安装交互。\n"
     "ZCode 的 Hook 由 Plugin 分发：不写项目配置文件，也没有 install/uninstall 命令；\n"
     "安装/卸载通过 ZCode 客户端的 Settings → Plugin Management 完成。"
 )
