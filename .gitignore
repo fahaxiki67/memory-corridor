@@ -15,3 +15,7 @@ dist/
 # 显式列出状态锁文件；.context-guard/ 已整体忽略，这里再列一次以防有人在仓库根手放同名文件。
 state.lock
 .mimosa/
+
+# ZCode video2code 插件在本工作区写入的运行环境标记（plugin_root 指向本机插件缓存），
+# 属本地工具产物，随插件刷新，不随项目提交。
+.v2c/

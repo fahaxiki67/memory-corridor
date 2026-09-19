@@ -15,6 +15,7 @@
 
 - **发布一致性：`.zcode-plugin/plugin.json` 版本同步到 2.10.0**。插件清单版本自 2.9.3 后未随发布更新（2.9.4、2.10.0 连续两版漏改；`__init__.py` 在 2.9.4 也曾漏改、事后单独补救），而 `zcode status` 会把清单版本原样报告给用户。插件分发文件的结构契约测试中加入回归检查：`pyproject.toml`、`context_guard_lite.__version__`、插件清单三处版本必须一致。
 - **文档与实际行为一致性修正**：README 测试小节的 CI 矩阵从过期的 Python 3.11–3.13 更正为 3.11–3.14（矩阵自 2.3.0 起含 3.14，以 `.github/workflows/ci.yml` 为准）；修复 CHANGELOG 2.3.1 / 2.4.0 / 2.5.0 / 2.6.0 四处标题行的复制粘贴损坏（重复标题拼接了 keepachangelog 链接与孤行）；`hooks/zcode_hook.py` 模块文档从 v2.9.1 之前的 `process` 型调用说明更正为现行 `command` 型（`python3 … || py -3 …` 双解释器回退）。
+- **收口补充**：README「目录结构」树补上 `.context-guard/constitution.md`（本 Unreleased 的章程功能把章程文件放进同一目录，目录树未同步），并新增 README 目录树 ↔ `ProjectPaths` 文件清单的结构契约测试防复发；`tests/test_lite.py` 里写在 `unittest.main()` 之后的模块级 `test_events_list_warns_on_malformed_lines`（unittest discover 不收集模块级函数，该覆盖从未真正在 CI 运行）收编为正式 TestCase；仓库 `.gitignore` 补 `.v2c/`（ZCode video2code 插件在本工作区写入的本地运行标记，非项目文件，防止误提交）。总测试 147 项。
 
 ## [2.10.0] - 2026-09-20
 

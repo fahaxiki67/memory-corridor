@@ -45,7 +45,8 @@ memory-corridor constitution clear
 ├── state.json       # 机器可读的当前账本
 ├── events.jsonl     # 追加式事件记录
 ├── notebook.md      # 人可以直接打开编辑的旁记事本
-└── recovery.md      # 最近一次恢复包
+├── recovery.md      # 最近一次恢复包
+└── constitution.md  # 项目章程（可选，constitution set 后出现）
 ```
 
 `init` 会确保项目 `.gitignore` 忽略 `.context-guard/`，避免把任务文本或内部记录误提交：已忽略则不改动；有 `.gitignore` 但缺条目则在末尾追加，已有内容原样保留；没有 `.gitignore` 则创建最小文件。写入失败只警告不阻塞，结果记入事件日志。若确实需要版本化旁记事本，删除 `.gitignore` 中对应行后再提交。

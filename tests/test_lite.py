@@ -649,30 +649,61 @@ class BackwardCompatibilityTests(unittest.TestCase):
         self.assertFalse(satisfied_after_bump)
 
 
+class EventsMalformedLineWarningTests(unittest.TestCase):
+    """审计日志损坏必须显式可见：events list 跳过坏行时在 stderr 告警，不让损坏冒充为空。
+
+    （收口回归：本覆盖原先写成 unittest.main() 之后的模块级 test_ 函数——
+    unittest discover 不收集模块级函数，等于从未在 CI 里运行过。）
+    """
+
+    def test_events_list_warns_on_malformed_lines(self) -> None:
+        import contextlib as _contextlib
+        import io as _io
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            init_project(root, "audit-project")
+            paths = project_paths(root)
+
+            with _contextlib.redirect_stdout(_io.StringIO()) as out:
+                self_eq_zero = main(["--root", str(root), "events", "list"])
+            assert self_eq_zero == 0
+            assert "contract.init" in out.getvalue()  # 正常事件照常列出
+
+            with paths.events.open("a", encoding="utf-8") as fh:
+                fh.write('{"at": "2026-01-01T00:00:00Z", "type": "requirement.a\n')  # 截断的 JSON
+                fh.write("not-json-at-all\n")  # 非 JSON 行
+
+            with _contextlib.redirect_stdout(_io.StringIO()) as out, _contextlib.redirect_stderr(_io.StringIO()) as err:
+                assert main(["--root", str(root), "events", "list"]) == 0
+            assert "2 行事件无法解析" in err.getvalue()  # 坏行计数显式告警
+            assert "contract.init" in out.getvalue()  # 有效事件不受影响
+
+
+class DirectoryTreeDocContractTests(unittest.TestCase):
+    """README「目录结构」树与 ProjectPaths 的结构契约：账本目录的常驻文件
+    增删时必须同步文档树（回归：constitution.md 加入 ProjectPaths 后树漏更）。"""
+
+    def test_readme_tree_lists_exactly_the_ledger_files(self) -> None:
+        repo_root = Path(__file__).resolve().parent.parent
+        readme = (repo_root / "README.md").read_text(encoding="utf-8")
+        section = readme.split("## 目录结构", 1)[1]
+        block = section.split("```", 2)[1]
+        documented = {
+            line.split("──", 1)[1].split("#", 1)[0].strip()
+            for line in block.splitlines()
+            if "──" in line
+        }
+        paths = project_paths(Path("doc-contract-probe"))
+        expected = {
+            paths.state.name,
+            paths.events.name,
+            paths.notebook.name,
+            paths.recovery.name,
+            paths.constitution.name,
+        }
+        self.assertEqual(documented, expected)
+
+
 if __name__ == "__main__":
     unittest.main()
-
-
-def test_events_list_warns_on_malformed_lines() -> None:
-    """审计日志损坏必须显式可见：events list 跳过坏行时在 stderr 告警，不让损坏冒充为空。"""
-    import contextlib as _contextlib
-    import io as _io
-
-    with tempfile.TemporaryDirectory() as td:
-        root = Path(td)
-        init_project(root, "audit-project")
-        paths = project_paths(root)
-
-        with _contextlib.redirect_stdout(_io.StringIO()) as out:
-            self_eq_zero = main(["--root", str(root), "events", "list"])
-        assert self_eq_zero == 0
-        assert "contract.init" in out.getvalue()  # 正常事件照常列出
-
-        with paths.events.open("a", encoding="utf-8") as fh:
-            fh.write('{"at": "2026-01-01T00:00:00Z", "type": "requirement.a\n')  # 截断的 JSON
-            fh.write("not-json-at-all\n")  # 非 JSON 行
-
-        with _contextlib.redirect_stdout(_io.StringIO()) as out, _contextlib.redirect_stderr(_io.StringIO()) as err:
-            assert main(["--root", str(root), "events", "list"]) == 0
-        assert "2 行事件无法解析" in err.getvalue()  # 坏行计数显式告警
-        assert "contract.init" in out.getvalue()  # 有效事件不受影响
