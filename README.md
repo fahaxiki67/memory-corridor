@@ -42,8 +42,10 @@ memory-corridor constitution clear
 
 ```text
 .context-guard/
-├── state.json       # 机器可读的当前账本
-├── events.jsonl     # 追加式事件记录
+├── state.json       # 机器可读的当前账本（唯一业务真源）
+├── events.jsonl     # 追加式事件记录（审计）
+├── events.pending.jsonl  # 事件暂存（仅当 events.jsonl 暂时不可写时出现，自动补记后删除）
+├── logs/            # evidence verify 的执行日志（strict 验收用）
 ├── notebook.md      # 人可以直接打开编辑的旁记事本
 ├── recovery.md      # 最近一次恢复包
 └── constitution.md  # 项目章程（可选，constitution set 后出现）
@@ -52,6 +54,16 @@ memory-corridor constitution clear
 `init` 会确保项目 `.gitignore` 忽略 `.context-guard/`，避免把任务文本或内部记录误提交：已忽略则不改动；有 `.gitignore` 但缺条目则在末尾追加，已有内容原样保留；没有 `.gitignore` 则创建最小文件。写入失败只警告不阻塞，结果记入事件日志。若确实需要版本化旁记事本，删除 `.gitignore` 中对应行后再提交。
 
 状态写入采用同目录临时文件加替换，避免进程中断时半写入 `state.json`。文本统一 UTF-8；路径使用 Python `pathlib`，不依赖 bash、PowerShell 特有语法或系统级服务，因此 Windows 和 macOS 使用同一份项目目录结构。
+
+#### 状态与审计的一致性语义
+
+**真源与提交点**：`state.json` 是唯一业务真源，锁内读改写 + 原子替换就是提交点。`events.jsonl`（审计）与 `notebook.md`（人读）是提交后的衍生记录，不存在多文件凭空原子——工具的承诺是「状态提交的事实不被审计通道的暂时故障掩盖」：
+
+- 每条事件带唯一幂等 id。`events.jsonl` 暂时写不进去（权限/磁盘占用）时，事件原样暂存到 `events.pending.jsonl`，每条命令开头与结尾自动锁内补记（按 id 去重，崩溃在「已写入、暂存未清理」之间也不会重复），补记完成即删除暂存文件并在 stderr 说明；
+- 暂存也失败（磁盘真的满了）时如实报错、退出码 2，并提示「状态可能已在报错前提交，请运行 status 核对」——绝不吞掉 OSError 假装成功；
+- `notebook.md` 写入失败只警告：它是可从 state/events 重建的衍生文件，不应让「状态已提交」的命令报失败。
+
+边界：若进程在「状态已提交、事件尚未写出」之间被强制杀死，该条审计会缺失（真源不受影响）；这是轻量本地方案的已知边界，跨机器/跨进程的强一致审计需要外部日志，不在本工具目标内。并发写安全由 `state.lock` 跨进程文件锁 + 单行 O_APPEND 追加保证。
 
 ## Windows 开始使用
 

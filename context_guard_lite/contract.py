@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,6 +16,8 @@ CONSTITUTION_FILE_NAME = "constitution.md"
 GITIGNORE_NAME = ".gitignore"
 DATA_IGNORE_ENTRY = ".context-guard/"
 _GITIGNORE_NOTE = "# The local ledger can contain task text and should not be committed by accident."
+# 事件暂存（outbox）：events.jsonl 暂时不可写时事件落这里，下一条命令幂等补记。
+PENDING_EVENTS_NAME = "events.pending.jsonl"
 
 # schema v1 的受控词表（唯一权威定义处）。requirements/evidence 模块从这里
 # re-export 既有名称，业务校验与 load_state 的结构校验共用同一份，避免多处
@@ -320,23 +324,133 @@ def save_state(paths: ProjectPaths, state: dict) -> None:
     _atomic_write_json(paths.state, state)
 
 
-def append_event(paths: ProjectPaths, event_type: str, details: dict | None = None) -> None:
+def append_event(paths: ProjectPaths, event_type: str, details: dict | None = None) -> str:
+    """追加一条事件到 events.jsonl；返回 "written" 或 "pending"（已暂存待重放）。
+
+    真源与提交语义：state.json 是唯一业务真源，``state_transaction`` 的原子
+    替换是提交点；events.jsonl/notebook.md 是提交后的审计与人读衍生记录。
+    历史缺陷是「状态已提交、随后审计写入失败」时命令整体报错，用户无法区分
+    「命令失败」和「状态已变」。现在：每条事件带唯一幂等 id；events.jsonl
+    写入失败（权限/磁盘/替换窗口）时事件原样暂存到 events.pending.jsonl，
+    由下一条命令开头/结尾的 ``flush_pending_events`` 锁内幂等补记（按 id 去重，
+    崩溃在「已写入、pending 未清理」之间也不会产生重复行）。暂存也失败时抛出
+    OSError——绝不吞掉错误假装成功，由 CLI 提示用户核对状态。
+    """
     paths.data.mkdir(parents=True, exist_ok=True)
-    event = {"at": utc_now(), "type": event_type, **(details or {})}
-    # events.jsonl 保持追加式；只有在实测体积增长确有必要时才加轮转。
-    with paths.events.open("a", encoding="utf-8", newline="\n") as handle:
-        handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+    event = {"at": utc_now(), "type": event_type, "id": uuid.uuid4().hex[:12], **(details or {})}
+    line = json.dumps(event, ensure_ascii=False)
+    try:
+        with paths.events.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(line + "\n")
+        return "written"
+    except OSError as events_exc:
+        pending_path = paths.data / PENDING_EVENTS_NAME
+        try:
+            with pending_path.open("a", encoding="utf-8", newline="\n") as handle:
+                handle.write(line + "\n")
+        except OSError as pending_exc:
+            raise OSError(
+                f"事件无法写入 {paths.events}（{events_exc}），暂存到 {pending_path} 也失败（{pending_exc}）；"
+                "注意：状态文件的修改已经提交、不受影响，请检查磁盘与权限后重试"
+            ) from pending_exc
+        return "pending"
 
 
-def append_notebook(paths: ProjectPaths, title: str, lines: list[str]) -> None:
-    paths.data.mkdir(parents=True, exist_ok=True)
-    if not paths.notebook.exists():
-        atomic_write(paths.notebook, "# 记忆回廊（Context Guard Lite 2.0）Notebook\n\n")
-    with paths.notebook.open("a", encoding="utf-8", newline="\n") as handle:
-        handle.write(f"## {utc_now()} — {_one_line(title)}\n")
+def flush_pending_events(paths: ProjectPaths) -> tuple[int, int]:
+    """把 events.pending.jsonl 暂存的事件幂等补记进 events.jsonl（锁内执行）。
+
+    返回 ``(成功补记条数, 仍无法写入条数)``。无法解析的暂存行（中断截断）
+    丢弃并告警；同一事件 id 已在 events.jsonl 中的跳过。补记成功但 pending
+    清理失败时不必处理：下次重放按 id 去重，天然幂等。
+    """
+    from .locking import state_lock
+
+    pending_path = paths.data / PENDING_EVENTS_NAME
+    if not paths.state.exists() or not pending_path.exists():
+        return 0, 0
+    try:
+        raw_lines = pending_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as exc:
+        raise GuardError(f"无法读取暂存事件文件 {pending_path}: {exc}") from exc
+    lines: list[str] = []
+    malformed = 0
+    for raw in raw_lines:
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        try:
+            value = json.loads(stripped)
+        except json.JSONDecodeError:
+            malformed += 1
+            continue
+        if not isinstance(value, dict):
+            malformed += 1
+            continue
+        lines.append(stripped)
+    if malformed:
+        print(
+            f"警告：{pending_path} 有 {malformed} 行无法解析（可能被中断截断），重放时已丢弃。",
+            file=sys.stderr,
+        )
+    replayed = 0
+    remaining: list[str] = []
+    with state_lock(paths):
+        # 去重基线必须在锁内读取：并发的另一个进程可能刚补记完同一批事件，
+        # 锁外读到的集合是陈旧的，会造成重复行（故障注入实测）。
+        try:
+            existing_ids = {event.get("id") for event in read_events(paths) if event.get("id")}
+        except GuardError:
+            # events.jsonl 暂时不可读（缺失/权限，正是事件被暂存的常见原因）：
+            # 以空基线尽力补记，append 会重建文件；total 去重由下次重放兜底。
+            existing_ids = set()
         for line in lines:
-            handle.write(f"- {_one_line(line)}\n")
-        handle.write("\n")
+            try:
+                event_id = json.loads(line).get("id")
+            except json.JSONDecodeError:  # pragma: no cover - 上面已过滤，防御性保留
+                continue
+            if event_id and event_id in existing_ids:
+                continue
+            try:
+                with paths.events.open("a", encoding="utf-8", newline="\n") as handle:
+                    handle.write(line + "\n")
+            except OSError:
+                remaining.append(line)
+                continue
+            if event_id:
+                existing_ids.add(event_id)
+            replayed += 1
+        try:
+            if remaining:
+                atomic_write(pending_path, "\n".join(remaining) + "\n")
+            else:
+                pending_path.unlink()
+        except OSError:
+            # 清理失败可自愈：pending 里多留的行会在下次重放时按 id 去重跳过。
+            pass
+    return replayed, len(remaining)
+
+
+def append_notebook(paths: ProjectPaths, title: str, lines: list[str]) -> bool:
+    """追加旁记事本；返回是否写入成功。
+
+    notebook 是给人读的衍生记录（内容可由 state.json/events 重建，纪律明确
+    不强求多文件原子）。写入失败只向 stderr 告警并返回 False，不抛异常：
+    状态与事件（真源和审计）已提交的事实，不应因衍生文件暂时不可写而被
+    「命令失败」的假象掩盖。
+    """
+    paths.data.mkdir(parents=True, exist_ok=True)
+    try:
+        if not paths.notebook.exists():
+            atomic_write(paths.notebook, "# 记忆回廊（Context Guard Lite 2.0）Notebook\n\n")
+        with paths.notebook.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(f"## {utc_now()} — {_one_line(title)}\n")
+            for line in lines:
+                handle.write(f"- {_one_line(line)}\n")
+            handle.write("\n")
+        return True
+    except OSError as exc:
+        print(f"警告：旁记事本写入失败（{exc}）；记录仍在 state.json 与 events.jsonl 中，notebook 可稍后重建。", file=sys.stderr)
+        return False
 
 
 def set_enabled(paths: ProjectPaths, enabled: bool) -> dict:

@@ -701,6 +701,8 @@ class DirectoryTreeDocContractTests(unittest.TestCase):
             paths.notebook.name,
             paths.recovery.name,
             paths.constitution.name,
+            "logs/",  # evidence verify 执行日志（MC-02 strict 验收）
+            "events.pending.jsonl",  # 事件暂存（MC-03 审计最终一致，仅故障时出现）
         }
         self.assertEqual(documented, expected)
 

@@ -16,7 +16,17 @@ from .constitution import (
     load_constraints,
     render_section,
 )
-from .contract import GuardError, add_note, init_project, load_state, project_paths, read_events, set_enabled, set_strict
+from .contract import (
+    GuardError,
+    add_note,
+    flush_pending_events,
+    init_project,
+    load_state,
+    project_paths,
+    read_events,
+    set_enabled,
+    set_strict,
+)
 from .evidence import add_evidence, list_evidence
 from .gate import check_gate
 from .integrations import claude as claude_integration
@@ -577,7 +587,7 @@ def _cmd_events(paths, args) -> int:
             print("暂无匹配的事件。")
             return 0
         for event in events:
-            details = ", ".join(f"{key}={value}" for key, value in event.items() if key not in {"at", "type"})
+            details = ", ".join(f"{key}={value}" for key, value in event.items() if key not in {"at", "type", "id"})
             suffix = f"  ({details})" if details else ""
             print(f"{event.get('at', '?')}  {event.get('type', '?')}{suffix}")
         return 0
@@ -704,12 +714,32 @@ def _cmd_zcode(paths, args) -> int:
     return 2
 
 
+def _drain_pending_events(paths) -> None:
+    """命令前后各尝试一次暂存事件补记；任何失败只警告，不阻塞业务命令。
+
+    未初始化的项目直接跳过；events.jsonl/锁暂时不可用时给出警告并保留现场，
+    下一条命令继续重试（flush 幂等，按事件 id 去重）。
+    """
+    if not paths.state.exists():
+        return
+    try:
+        replayed, leftover = flush_pending_events(paths)
+    except (GuardError, OSError) as exc:
+        print(f"警告：暂存事件重放失败（{exc}）；将在下一条命令自动重试。", file=sys.stderr)
+        return
+    if replayed:
+        print(f"已把此前暂存的 {replayed} 条事件补记进 events.jsonl。", file=sys.stderr)
+    if leftover:
+        print(f"警告：仍有 {leftover} 条事件无法写入 events.jsonl，已保留在 events.pending.jsonl，下一条命令自动重试。", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     _configure_output()
     parser = _parser()
     args = parser.parse_args(argv)
     paths = project_paths(args.root)
     try:
+        _drain_pending_events(paths)
         if args.top_command == "init":
             outcome: dict = {}
             state = init_project(paths.root, args.name, outcome=outcome)
@@ -768,5 +798,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"未知命令: {args.top_command}")
     except (GuardError, OSError, ValueError) as exc:
         print(f"错误：{exc}", file=sys.stderr)
+        if isinstance(exc, OSError):
+            # 状态提交与审计写入是两个物理步骤：审计通道彻底不可写时必须让
+            # 用户知道状态可能已经变化，不能用一句「命令失败」掩盖。
+            print("提示：状态文件的修改可能在报错前已经提交；请运行 memory-corridor status 核对真实账本。", file=sys.stderr)
         return 2
+    finally:
+        _drain_pending_events(paths)
     return 2
