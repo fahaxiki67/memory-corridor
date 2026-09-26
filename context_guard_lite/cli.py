@@ -16,7 +16,7 @@ from .constitution import (
     load_constraints,
     render_section,
 )
-from .contract import GuardError, add_note, init_project, load_state, project_paths, read_events, set_enabled
+from .contract import GuardError, add_note, init_project, load_state, project_paths, read_events, set_enabled, set_strict
 from .evidence import add_evidence, list_evidence
 from .gate import check_gate
 from .integrations import claude as claude_integration
@@ -24,6 +24,7 @@ from .integrations import codex as codex_integration
 from .integrations import zcode as zcode_integration
 from .recovery import build_packet, write_packet
 from .requirements import KINDS, STATUSES, add_requirement, import_requirements, mark_done, update_requirement
+from .verification import verify_requirement
 
 NOTE_KINDS = {"experience", "decision", "lesson", "note"}
 
@@ -53,6 +54,11 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("on", help="开启保护")
     commands.add_parser("off", help="关闭保护但保留记录")
 
+    strict = commands.add_parser(
+        "strict", help="开关 strict 验收（success evidence 必须来自实际执行且代码未变）"
+    )
+    strict.add_argument("mode", choices=["on", "off"], help="on=开启 strict 验收，off=关闭（默认关闭）")
+
     status = commands.add_parser("status", help="查看状态")
     status.add_argument("--json", action="store_true", dest="as_json")
 
@@ -81,12 +87,26 @@ def _parser() -> argparse.ArgumentParser:
 
     evidence = commands.add_parser("evidence", help="记录 evidence")
     evidence_commands = evidence.add_subparsers(dest="evidence_command", required=True)
-    evidence_add = evidence_commands.add_parser("add", help="新增 evidence")
+    evidence_add = evidence_commands.add_parser("add", help="新增 evidence（手工声明；strict 开启时不满足门禁）")
     evidence_add.add_argument("--for", dest="requirement_id", required=True, help="绑定的 requirement ID")
     evidence_add.add_argument("--summary", required=True, help="简短的验证摘要")
     evidence_add.add_argument("--result", choices=["success", "failed", "unknown"], required=True)
     evidence_add.add_argument("--target", help="验证的文件、URL 或其他目标")
     evidence_add.add_argument("--command", help="实际执行的验证命令")
+    evidence_verify = evidence_commands.add_parser(
+        "verify", help="真实执行验证命令并记录 execution evidence（strict 验收认这种）"
+    )
+    evidence_verify.add_argument("--for", dest="requirement_id", required=True, help="绑定的 requirement ID")
+    evidence_verify.add_argument("--summary", required=True, help="简短的验证摘要")
+    evidence_verify.add_argument("--target", help="验证的文件、URL 或其他目标")
+    evidence_verify.add_argument(
+        "--timeout", type=float, default=600.0, help="命令超时秒数（必设超时，默认 600；超时按 failed 记录）"
+    )
+    evidence_verify.add_argument(
+        "command",
+        nargs=argparse.REMAINDER,
+        help="要执行的命令（argv 形式，用 -- 与选项分隔；不经 shell，不做通配/管道展开）",
+    )
     evidence_list = evidence_commands.add_parser("list", help="列出 evidence")
     evidence_list.add_argument("--json", action="store_true", dest="as_json")
     evidence_list.add_argument("--for", dest="filter_requirement", help="只列出绑定到指定 requirement ID 的 evidence")
@@ -189,6 +209,7 @@ def _cmd_status(paths, as_json: bool) -> int:
     result = {
         "project": state["project"],
         "enabled": state["contract"].get("enabled", False),
+        "strict": state["contract"].get("strict", False),
         "requirements": {"total": len(state["requirements"]), "active": sum(item.get("status") != "superseded" for item in state["requirements"])},
         "evidence": len(state["evidence"]),
         "notes": len(state["notes"]),
@@ -207,7 +228,7 @@ def _cmd_status(paths, as_json: bool) -> int:
         _print_json(result)
     else:
         print(f"项目：{state['project']['name']}")
-        print(f"保护：{'开启' if result['enabled'] else '关闭'}")
+        print(f"保护：{'开启' if result['enabled'] else '关闭'}；strict 验收：{'开启' if result['strict'] else '关闭'}")
         print(f"Requirements：{result['requirements']['active']} active / {result['requirements']['total']} total")
         print(f"Evidence：{result['evidence']}；笔记：{result['notes']}")
         print(f"Gate：{gate['status']} — {gate['summary']}")
@@ -335,6 +356,31 @@ def _cmd_evidence(paths, args) -> int:
             command=args.command,
         )
         print(f"已记录 {evidence['id']} → {evidence['requirement_id']} v{evidence['requirement_revision']} [{evidence['result']}]")
+        if evidence["result"] == "success":
+            print("注意：这是手工声明（manual）的 evidence；strict 验收开启时需用 evidence verify 真实执行。")
+        return 0
+    if args.evidence_command == "verify":
+        # argparse 的 REMAINDER 会把分隔符 `--` 一并收进列表（且 `-c` 之后的
+        # 内容不再被解析为选项）；命令 argv 不能包含它，否则子进程会把 `--`
+        # 当成程序名启动失败。这里只剥第一个 `--`，其余原样传递。
+        command = list(args.command)
+        if command and command[0] == "--":
+            command = command[1:]
+        evidence = verify_requirement(
+            paths,
+            args.requirement_id,
+            args.summary,
+            command,
+            timeout=args.timeout,
+            target=args.target,
+        )
+        verification = evidence["verification"]
+        print(f"已执行并记录 {evidence['id']} → {evidence['requirement_id']} v{evidence['requirement_revision']} [{evidence['result']}]")
+        print(f"命令：{' '.join(verification['argv'])}")
+        print(f"退出码：{verification['exit_code']}{'（超时终止）' if verification['timed_out'] else ''}")
+        print(f"日志：{paths.data / verification['log_file']}")
+        if evidence["result"] != "success":
+            print("结果不是 success：完成门禁仍会阻塞，请修复后重新验证。", file=sys.stderr)
         return 0
     items = list_evidence(paths)
     filter_requirement = getattr(args, "filter_requirement", None)
@@ -347,7 +393,9 @@ def _cmd_evidence(paths, args) -> int:
         print("暂无 evidence。")
     else:
         for item in items:
-            print(f"{item['id']} → {item['requirement_id']} v{item['requirement_revision']} [{item['result']}]：{item['summary']}")
+            verification = item.get("verification") or {}
+            mode = "execution" if verification.get("mode") == "execution" else "manual"
+            print(f"{item['id']} → {item['requirement_id']} v{item['requirement_revision']} [{item['result']}] ({mode})：{item['summary']}")
     return 0
 
 
@@ -685,6 +733,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.top_command == "off":
             set_enabled(paths, False)
             print("保护已关闭，记录仍保留。")
+            return 0
+        if args.top_command == "strict":
+            strict_on = args.mode == "on"
+            set_strict(paths, strict_on)
+            if strict_on:
+                print("strict 验收已开启：success evidence 必须来自实际执行（evidence verify），且执行后代码未变化。")
+                print("边界：防误报不防篡改——同权限用户仍可修改文件与账本。")
+            else:
+                print("strict 验收已关闭：手工声明与执行验证的 evidence 均按既有规则参与门禁。")
             return 0
         if args.top_command == "status":
             return _cmd_status(paths, args.as_json)

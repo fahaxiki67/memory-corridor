@@ -99,14 +99,18 @@ def mark_done(paths: ProjectPaths, requirement_id: str) -> tuple[dict, bool]:
 
     门禁语义由 check_gate 定义，本函数只做同等判定用于提示，不产生任何 evidence。
     状态更新与证据判定放在同一把锁内完成：事务外重读可能读到其他进程的中间状态，
-    导致「已满足/未满足」提示与账本真实内容不一致。
+    导致「已满足/未满足」提示与账本真实内容不一致。strict 验收开启时，「满足」
+    额外要求最新 success evidence 来自实际执行且未过期（与 check_gate 同一实现）。
     """
     from .evidence import latest_matching_evidence  # 函数内导入，避免 requirements ↔ evidence 循环
+    from .verification import strict_reasons  # 函数内导入：verification 依赖本模块的 get_requirement
 
     with state_transaction(paths) as state:
         requirement, revision_changed = _apply_requirement_update(state, requirement_id, text=None, kind=None, status="done")
         latest = latest_matching_evidence(state, requirement)
         satisfied = latest is not None and latest.get("result") == "success"
+        if satisfied:
+            satisfied = not strict_reasons(state, requirement, paths, latest)
         requirement = json.loads(json.dumps(requirement))  # 快照，避免调用方改到锁外状态
     _log_requirement_update(paths, requirement, revision_changed, None)
     return requirement, satisfied

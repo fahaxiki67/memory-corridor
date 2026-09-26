@@ -193,6 +193,14 @@ def validate_state(state: dict, paths: ProjectPaths) -> None:
     for key in ("created_at", "updated_at"):
         if not _is_filled_text(contract.get(key)):
             raise _corrupt(paths, f"contract.{key} 缺失或不是非空字符串")
+    if "strict" in contract and type(contract["strict"]) is not bool:
+        # strict 是 v2.12 引入的可选开关（缺席=关闭）；一旦出现就必须是真正 bool，
+        # 不允许 "on"/1 之类手工值混进来——那会让门禁语义变得不可预测。
+        raise _corrupt(
+            paths,
+            f"contract.strict 不是真正的布尔值（实际 {contract['strict']!r}）；"
+            "如需开关 strict 验收请运行 memory-corridor strict on/off",
+        )
 
     requirement_by_id: dict[str, dict] = {}
     seen_requirement_ids: set[str] = set()
@@ -339,6 +347,21 @@ def set_enabled(paths: ProjectPaths, enabled: bool) -> dict:
     label = "开启" if enabled else "关闭"
     append_event(paths, "contract.on" if enabled else "contract.off", {"enabled": enabled})
     append_notebook(paths, f"保护{label}", [f"保护状态：{label}"])
+    return state
+
+
+def set_strict(paths: ProjectPaths, strict: bool) -> dict:
+    """开关 strict 验收：开启后完成门禁只认「实际执行且未过期」的 success evidence。
+
+    与 set_enabled 同构：锁内改 contract、锁外记事件与旁记事本。
+    """
+    from .locking import state_transaction
+
+    with state_transaction(paths) as state:
+        state["contract"]["strict"] = strict
+    label = "开启" if strict else "关闭"
+    append_event(paths, "contract.strict_on" if strict else "contract.strict_off", {"strict": strict})
+    append_notebook(paths, f"strict 验收{label}", [f"strict 验收：{label}（success evidence 必须来自实际执行）"])
     return state
 
 

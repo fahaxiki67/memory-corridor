@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .contract import ProjectPaths, load_state
 from .evidence import matching_evidence
+from .verification import strict_reasons
 
 
 def _stale_evidence(state: dict, requirement: dict) -> list[dict]:
@@ -87,13 +88,28 @@ def check_gate(paths: ProjectPaths) -> dict:
                 }
             )
         else:
-            satisfied.append(
-                {
-                    "requirement_id": requirement["id"],
-                    "evidence_id": latest["id"],
-                    "revision": requirement.get("revision", 1),
-                }
-            )
+            # 基础条件已满足，再叠加 strict 验收（contract.strict 开启时生效）：
+            # 手工声明的 success 不算数；执行过的 success 还要「退出码为零、
+            # 日志在且未被改、工作树指纹未变」。未开启时这里恒为空。
+            extra = strict_reasons(state, requirement, paths, latest)
+            if extra:
+                blocking.append(
+                    {
+                        "requirement_id": requirement["id"],
+                        "text": requirement["text"],
+                        "status": requirement.get("status"),
+                        "revision": requirement.get("revision", 1),
+                        "reasons": extra,
+                    }
+                )
+            else:
+                satisfied.append(
+                    {
+                        "requirement_id": requirement["id"],
+                        "evidence_id": latest["id"],
+                        "revision": requirement.get("revision", 1),
+                    }
+                )
 
     ok = not blocking
     return {

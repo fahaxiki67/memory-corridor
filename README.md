@@ -161,6 +161,29 @@ context-guard evidence list
 
 `success`、`failed`、`unknown` 必须显式填写。只有绑定到 requirement 当前 revision 的 `success`，才可能通过门禁；孤立的“命令执行成功”不会自动关闭任何要求。
 
+#### strict 验收：区分手工声明与执行验证（实验性功能）
+
+`evidence add` 的 result/command/summary 都是手工声明（manual），默认门禁按既有规则接受它。如果你要求「success 必须真的跑过」，开启 strict 验收：
+
+```text
+context-guard strict on
+context-guard evidence verify --for R002 --summary "全量单测通过" --timeout 300 -- python -m unittest discover -s tests
+context-guard gate check
+```
+
+`evidence verify` 以 argv 形式真实执行命令（不经 shell、不做通配/管道展开），必须设超时（超时按 failed 记录），退出码自动推导 result（0=success，非 0/超时/无法启动=failed），并在 `.context-guard/logs/<E###>.log` 落一份执行日志（stdout/stderr/退出码/起止时间）。evidence 会记录：实际 argv、cwd、起止时间、退出码、超时标记、日志路径与日志 SHA-256、绑定的 requirement revision、执行时的工作树指纹。`evidence list` 会标注每条是 `(manual)` 还是 `(execution)`。
+
+strict 开启后，完成门禁对 success evidence 额外要求：
+
+1. 来自实际执行（`verification.mode == "execution"`），手工声明的 success 明确阻塞；
+2. 记录的退出码为零、没有超时、没有启动失败；
+3. 执行日志还在且内容 hash 一致（日志被删或被改都会阻塞）；
+4. 工作树指纹未变——指纹覆盖 HEAD、未提交修改（含暂存）与未跟踪文件内容，改一行没提交的代码也会让旧证据过期；指纹刻意排除 `.context-guard/` 自身，记录证据不会让自己失效。
+
+**边界（防误报，不防篡改）**：strict 验收防止「改了代码还引用旧结论」「日志丢了还说验证过」「手填 success 冒充执行」这类不一致；同权限用户仍然可以改文件、改账本、重放命令，本工具不承诺抵御蓄意篡改。是否允许某条命令由调用方决定，工具不做白名单。
+
+`strict off` 恢复既有行为；`contract.strict` 在状态文件中必须是真正的布尔值，手工写坏会被读取校验拒绝。
+
 ### 4. 写入经验和过程记录
 
 ```text

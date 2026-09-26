@@ -157,9 +157,11 @@ def build_packet(
         for evidence in recent_evidence:
             target = f"；目标：{evidence['target']}" if evidence.get("target") else ""
             command = f"；命令：{evidence['command']}" if evidence.get("command") else ""
+            verification = evidence.get("verification") or {}
+            mode = "；验证：execution" if verification.get("mode") == "execution" else ""
             lines.append(
                 f"- {evidence['id']} → {evidence['requirement_id']} v{evidence['requirement_revision']} "
-                f"[{evidence['result']}] {evidence['summary']}{target}{command}"
+                f"[{evidence['result']}] {evidence['summary']}{target}{command}{mode}"
             )
 
     lines.extend(["", "## 旁记事本最近记录", ""])
