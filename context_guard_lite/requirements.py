@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import json
 
-from .contract import GuardError, ProjectPaths, append_event, append_notebook, utc_now
+from .contract import (
+    REQUIREMENT_KINDS as KINDS,  # noqa: F401  (re-export 既有名称，权威定义在 contract)
+)
+from .contract import (
+    REQUIREMENT_STATUSES as STATUSES,  # noqa: F401
+)
+from .contract import (
+    GuardError,
+    ProjectPaths,
+    append_event,
+    append_notebook,
+    utc_now,
+)
 from .locking import state_transaction
-
-KINDS = {"must", "avoid", "acceptance"}
-STATUSES = {"open", "blocked", "done", "superseded"}
 
 
 def _clean_text(value: str) -> str:

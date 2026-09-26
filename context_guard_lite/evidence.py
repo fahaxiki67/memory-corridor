@@ -1,10 +1,18 @@
 from __future__ import annotations
 
-from .contract import GuardError, ProjectPaths, append_event, append_notebook, load_state, utc_now
+from .contract import (
+    EVIDENCE_RESULTS as RESULTS,  # noqa: F401  (re-export 既有名称，权威定义在 contract)
+)
+from .contract import (
+    GuardError,
+    ProjectPaths,
+    append_event,
+    append_notebook,
+    load_state,
+    utc_now,
+)
 from .locking import state_transaction
 from .requirements import get_requirement
-
-RESULTS = {"success", "failed", "unknown"}
 
 
 def matching_evidence(state: dict, requirement: dict) -> list[dict]:

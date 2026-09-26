@@ -15,6 +15,13 @@ GITIGNORE_NAME = ".gitignore"
 DATA_IGNORE_ENTRY = ".context-guard/"
 _GITIGNORE_NOTE = "# The local ledger can contain task text and should not be committed by accident."
 
+# schema v1 的受控词表（唯一权威定义处）。requirements/evidence 模块从这里
+# re-export 既有名称，业务校验与 load_state 的结构校验共用同一份，避免多处
+# 手写集合后漂移。
+REQUIREMENT_KINDS = frozenset({"must", "avoid", "acceptance"})
+REQUIREMENT_STATUSES = frozenset({"open", "blocked", "done", "superseded"})
+EVIDENCE_RESULTS = frozenset({"success", "failed", "unknown"})
+
 
 class GuardError(RuntimeError):
     """A user-fixable Context Guard error."""
@@ -139,6 +146,134 @@ def init_project(root: Path | str | None = None, name: str | None = None, outcom
     return state
 
 
+def _is_filled_text(value: object) -> bool:
+    """非空字符串（容忍纯空白以外的任何内容；空白字符串视为缺失）。"""
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _is_count(value: object) -> bool:
+    """真正的整数。bool 是 int 的子类，True/False 不能冒充 revision。"""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _corrupt(paths: ProjectPaths, detail: str) -> GuardError:
+    return GuardError(
+        f"状态文件损坏（{detail}），已拒绝读取且未修改原文件。"
+        f"请人工检查或从备份恢复 {paths.state}；确认无误前完成门禁按阻塞处理。"
+    )
+
+
+def validate_state(state: dict, paths: ProjectPaths) -> None:
+    """严格校验 schema v1 状态结构；损坏抛 GuardError，不修改任何文件。
+
+    为什么两侧都拦：``load_state`` 侧防止坏数据被当正常状态放行（预审实证：
+    ``contract`` 缺 ``enabled`` 时门禁把它当 disabled 直接 ``ok=True``，损坏
+    状态反而「通过」）；``save_state`` 侧防止程序自身把不完整状态写回磁盘。
+    这里刻意不提供宽松默认值：兼容旧数据必须走显式迁移（升 schema_version），
+    而不是静默补字段掩盖坏数据。用户明确 ``enabled=false`` 与空账本 idle 的
+    既有设计不受影响——校验只拒绝「缺字段/类型错/结构坏」，不改变语义。
+    """
+    project = state["project"]
+    if not _is_filled_text(project.get("name")):
+        raise _corrupt(paths, "project.name 缺失或不是非空字符串")
+    if not _is_filled_text(project.get("root")):
+        raise _corrupt(paths, "project.root 缺失或不是非空字符串")
+    for key in ("created_at", "updated_at"):
+        if not _is_filled_text(state.get(key)):
+            raise _corrupt(paths, f"{key} 缺失或不是非空字符串")
+
+    contract = state["contract"]
+    enabled = contract.get("enabled")
+    if type(enabled) is not bool:
+        raise _corrupt(
+            paths,
+            f"contract.enabled 缺失或不是真正的布尔值（实际 {enabled!r}）；"
+            "如需关闭保护请运行 memory-corridor off，不要手工删除字段",
+        )
+    for key in ("created_at", "updated_at"):
+        if not _is_filled_text(contract.get(key)):
+            raise _corrupt(paths, f"contract.{key} 缺失或不是非空字符串")
+
+    requirement_by_id: dict[str, dict] = {}
+    seen_requirement_ids: set[str] = set()
+    for index, requirement in enumerate(state["requirements"]):
+        label = f"requirements[{index}]"
+        if not isinstance(requirement, dict):
+            raise _corrupt(paths, f"{label} 不是对象")
+        requirement_id = requirement.get("id")
+        if not _is_filled_text(requirement_id):
+            raise _corrupt(paths, f"{label}.id 缺失或不是非空字符串")
+        id_key = requirement_id.upper()
+        if id_key in seen_requirement_ids:
+            raise _corrupt(paths, f"{label}.id 与其他 requirement 重复（ID 比较大小写不敏感）: {requirement_id}")
+        seen_requirement_ids.add(id_key)
+        if requirement.get("kind") not in REQUIREMENT_KINDS:
+            raise _corrupt(paths, f"{label}.kind 非法（{requirement.get('kind')!r}，可选 {sorted(REQUIREMENT_KINDS)}）")
+        if not _is_filled_text(requirement.get("text")):
+            raise _corrupt(paths, f"{label}.text 缺失或不是非空字符串")
+        if requirement.get("status") not in REQUIREMENT_STATUSES:
+            raise _corrupt(paths, f"{label}.status 非法（{requirement.get('status')!r}，可选 {sorted(REQUIREMENT_STATUSES)}）")
+        revision = requirement.get("revision")
+        if not _is_count(revision) or revision < 1:
+            raise _corrupt(paths, f"{label}.revision 必须是 >=1 的整数（实际 {revision!r}）")
+        if not isinstance(requirement.get("history"), list):
+            raise _corrupt(paths, f"{label}.history 不是列表")
+        for key in ("created_at", "updated_at"):
+            if not _is_filled_text(requirement.get(key)):
+                raise _corrupt(paths, f"{label}.{key} 缺失或不是非空字符串")
+        requirement_by_id[id_key] = requirement
+
+    seen_evidence_ids: set[str] = set()
+    for index, evidence in enumerate(state["evidence"]):
+        label = f"evidence[{index}]"
+        if not isinstance(evidence, dict):
+            raise _corrupt(paths, f"{label} 不是对象")
+        evidence_id = evidence.get("id")
+        if not _is_filled_text(evidence_id):
+            raise _corrupt(paths, f"{label}.id 缺失或不是非空字符串")
+        id_key = evidence_id.upper()
+        if id_key in seen_evidence_ids:
+            raise _corrupt(paths, f"{label}.id 与其他 evidence 重复（ID 比较大小写不敏感）: {evidence_id}")
+        seen_evidence_ids.add(id_key)
+        requirement_id = evidence.get("requirement_id")
+        if not _is_filled_text(requirement_id):
+            raise _corrupt(paths, f"{label}.requirement_id 缺失或不是非空字符串")
+        bound = requirement_by_id.get(requirement_id.upper())
+        if bound is None:
+            raise _corrupt(paths, f"{label}.requirement_id={requirement_id} 没有对应的 requirement（证据绑定断裂）")
+        evidence_revision = evidence.get("requirement_revision")
+        if not _is_count(evidence_revision) or evidence_revision < 1:
+            raise _corrupt(paths, f"{label}.requirement_revision 必须是 >=1 的整数（实际 {evidence_revision!r}）")
+        if evidence_revision > bound["revision"]:
+            raise _corrupt(
+                paths,
+                f"{label} 绑定 v{evidence_revision}，但 requirement {bound['id']} 当前只有 v{bound['revision']}"
+                "（证据不能绑定未来版本）",
+            )
+        if evidence.get("result") not in EVIDENCE_RESULTS:
+            raise _corrupt(paths, f"{label}.result 非法（{evidence.get('result')!r}，可选 {sorted(EVIDENCE_RESULTS)}）")
+        if not _is_filled_text(evidence.get("summary")):
+            raise _corrupt(paths, f"{label}.summary 缺失或不是非空字符串")
+        if not _is_filled_text(evidence.get("created_at")):
+            raise _corrupt(paths, f"{label}.created_at 缺失或不是非空字符串")
+
+    seen_note_ids: set[str] = set()
+    for index, note in enumerate(state["notes"]):
+        label = f"notes[{index}]"
+        if not isinstance(note, dict):
+            raise _corrupt(paths, f"{label} 不是对象")
+        note_id = note.get("id")
+        if not _is_filled_text(note_id):
+            raise _corrupt(paths, f"{label}.id 缺失或不是非空字符串")
+        id_key = note_id.upper()
+        if id_key in seen_note_ids:
+            raise _corrupt(paths, f"{label}.id 与其他笔记重复: {note_id}")
+        seen_note_ids.add(id_key)
+        for key in ("kind", "source", "text", "created_at"):
+            if not _is_filled_text(note.get(key)):
+                raise _corrupt(paths, f"{label}.{key} 缺失或不是非空字符串")
+
+
 def load_state(paths: ProjectPaths) -> dict:
     _ensure_initialized(paths)
     try:
@@ -163,10 +298,15 @@ def load_state(paths: ProjectPaths) -> dict:
         raise GuardError(f"状态文件中的 project/contract 不是对象: {paths.state}")
     if not all(isinstance(state[key], list) for key in ("requirements", "evidence", "notes")):
         raise GuardError(f"状态文件中的 requirements/evidence/notes 不是列表: {paths.state}")
+    validate_state(state, paths)
     return state
 
 
 def save_state(paths: ProjectPaths, state: dict) -> None:
+    # 写入前同样严格校验：防止程序自身把不完整/损坏的状态落盘，让「磁盘上的
+    # state.json 一定通过 load_state 校验」成为不变量。校验失败时原子写尚未
+    # 发生，原文件保持修改前内容。
+    validate_state(state, paths)
     state["updated_at"] = utc_now()
     state["contract"]["updated_at"] = state["updated_at"]
     _atomic_write_json(paths.state, state)

@@ -19,7 +19,10 @@ def _stale_evidence(state: dict, requirement: dict) -> list[dict]:
 def check_gate(paths: ProjectPaths) -> dict:
     state = load_state(paths)
     contract = state["contract"]
-    if not contract.get("enabled", False):
+    # load_state 已做严格校验：enabled 必然是真正的 bool，缺失/类型错误的损坏
+    # 账本在读取阶段即被拒绝（损坏 ≠ disabled，绝不静默放行）。用户主动
+    # `memory-corridor off` 写入的 enabled=false 仍按既有设计返回 disabled/ok。
+    if not contract["enabled"]:
         return {
             "ok": True,
             "status": "disabled",
